@@ -4,15 +4,19 @@ The engine owns state, security checks and acceptance. Procedural checks are del
 a ``JurisdictionRuleset`` that sees only an immutable snapshot and may return procedural
 findings; it can neither mutate state nor relax actor authority, evidence ACLs or
 structural reference checks.
+
+Security checks run in a fixed order: role authorization from the authoritative,
+fail-closed table in ``indubio.core.authorization`` first, then structural reference and
+evidence-ACL checks, then the ruleset's procedural findings.
 """
 
 from collections.abc import Iterable, Mapping
 
+from indubio.core.authorization import authorization_finding, recipient_finding
 from indubio.core.disclosure import (
-    DISCLOSER_ROLES,
-    RECIPIENT_ROLES,
     Grants,
     access_at,
+    has_access,
     is_disclosable_record,
 )
 from indubio.core.models import (
@@ -24,9 +28,7 @@ from indubio.core.models import (
     Object,
     Phase,
     Proposal,
-    Role,
     RuleFinding,
-    RuleOnMotion,
     SimulationConfig,
     SubmitEvidence,
     TrialEvent,
@@ -114,6 +116,9 @@ class SimulationEngine:
         """Current access: scenario grants plus accepted disclosures so far."""
         return access_at(actor_id, self._evidence_acl, self._grants)
 
+    def _has_access(self, actor_id: str, evidence_id: str) -> bool:
+        return has_access(actor_id, evidence_id, self._evidence_acl, self._grants)
+
     def evidence_view(self, actor_id: str) -> list[EvidenceRecord]:
         """Detached copies of the records a known actor can *currently* see.
 
@@ -189,36 +194,27 @@ class SimulationEngine:
                                         severity="security"))
 
         # Never loosen security or actor authority merely by selecting realistic mode.
-        if isinstance(action, SubmitEvidence):
-            if action.evidence_id not in self._access(actor.actor_id):
-                security("ACL_EVIDENCE", "Actor cannot access or introduce this evidence ID")
+        # 1. Role authorization from the authoritative, fail-closed policy table.
+        authorization = authorization_finding(actor.role, action)
+        if authorization is not None:
+            findings.append(authorization)
+        # 2. Structural reference and evidence-ACL checks, independent of role.
+        if isinstance(action, SubmitEvidence) and not self._has_access(
+            actor.actor_id, action.evidence_id
+        ):
+            security("ACL_EVIDENCE", "Actor cannot access or introduce this evidence ID")
         if isinstance(action, DiscloseEvidence):
-            if actor.role not in DISCLOSER_ROLES:
-                security("AUTH_DISCLOSE", "Role cannot disclose evidence in this starter model")
             recipient = self._actors.get(action.recipient_actor_id)
             if recipient is None or recipient.actor_id == actor.actor_id:
                 security("REFERENCE_ACTOR", "Recipient must be another known actor")
-            elif recipient.role not in RECIPIENT_ROLES:
-                security("AUTH_DISCLOSE_RECIPIENT",
-                         "Recipient role cannot receive disclosures in this starter model")
-            if action.evidence_id not in self._access(actor.actor_id):
+            elif (recipient_denied := recipient_finding(recipient.role)) is not None:
+                findings.append(recipient_denied)
+            if not self._has_access(actor.actor_id, action.evidence_id):
                 # Same finding for unknown, sealed and inaccessible IDs: no oracle.
                 security("ACL_EVIDENCE", "Actor cannot access or disclose this evidence ID")
             elif not is_disclosable_record(self._evidence, action.evidence_id):
                 security("DISCLOSE_RECORD_REQUIRED",
                          "Only registry-backed evidence records can be disclosed")
-        if isinstance(action, RuleOnMotion) and actor.role != Role.JUDGE:
-            security("AUTH_RULING", "Only a judge can issue rulings")
-        if isinstance(action, MovePhase) and actor.role != Role.JUDGE:
-            security("AUTH_PHASE", "Only a judge can direct phase transitions")
-        if isinstance(action, FileMotion) and actor.role not in {
-            Role.DEFENSE, Role.PROSECUTOR, Role.DEFENDANT
-        }:
-            security("AUTH_MOTION", "Role cannot file motions in this starter model")
-        if isinstance(action, Object) and actor.role not in {
-            Role.DEFENSE, Role.PROSECUTOR, Role.DEFENDANT
-        }:
-            security("AUTH_OBJECTION", "Role cannot lodge objections in starter model")
         if isinstance(action, Object) and not (
             1 <= action.target_event_sequence <= len(self._events)
         ):

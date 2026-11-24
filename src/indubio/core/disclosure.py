@@ -3,7 +3,10 @@
 Illustrative only: NOT derived from the StPO (e.g. rules on file inspection) or any other
 verified source, and not legal advice.
 
-Who may disclose, to whom (structural, enforced as ``security`` findings in every mode):
+Who may disclose, to whom (structural, enforced as ``security`` findings in every mode).
+The role rules are owned by the authoritative table in ``indubio.core.authorization``;
+the constants below are read-only aliases of it, and revalidation uses the same
+predicates as the engine:
 
 * Discloser roles: ``judge``, ``prosecutor``, ``defense`` (``DISCLOSER_ROLES``).
 * Recipient roles: ``judge``, ``prosecutor``, ``defense``, ``defendant``
@@ -29,12 +32,18 @@ trip reproduces them; they never alter the immutable ``EvidenceRecord``.
 
 from collections.abc import Mapping, Sequence
 
-from indubio.core.models import Actor, DiscloseEvidence, Role, TrialEvent
+from indubio.core.authorization import (
+    ACTION_POLICY,
+    DISCLOSURE_RECIPIENT_ROLES,
+    can_receive_disclosure,
+    is_authorized,
+)
+from indubio.core.models import Actor, DiscloseEvidence, TrialEvent
 from indubio.evidence.models import EpistemicLayer
 from indubio.evidence.registry import EvidenceRegistry
 
-DISCLOSER_ROLES = frozenset({Role.JUDGE, Role.PROSECUTOR, Role.DEFENSE})
-RECIPIENT_ROLES = frozenset({Role.JUDGE, Role.PROSECUTOR, Role.DEFENSE, Role.DEFENDANT})
+DISCLOSER_ROLES = ACTION_POLICY[DiscloseEvidence].allowed_roles
+RECIPIENT_ROLES = DISCLOSURE_RECIPIENT_ROLES
 
 # actor_id -> {evidence_id: sequence of the first accepted disclosure to that actor}
 Grants = dict[str, dict[str, int]]
@@ -49,6 +58,19 @@ def access_at(
     actor_id: str, base_acl: Mapping[str, frozenset[str]], grants: Grants
 ) -> frozenset[str]:
     return frozenset(base_acl.get(actor_id, frozenset())) | frozenset(grants.get(actor_id, {}))
+
+
+def has_access(
+    actor_id: str,
+    evidence_id: str,
+    base_acl: Mapping[str, frozenset[str]],
+    grants: Grants,
+) -> bool:
+    """Membership test equivalent to ``evidence_id in access_at(...)``, without building
+    the union (used once per replayed disclosure)."""
+    return evidence_id in base_acl.get(actor_id, frozenset()) or evidence_id in grants.get(
+        actor_id, {}
+    )
 
 
 def derive_grants(
@@ -77,11 +99,11 @@ def derive_grants(
             discloser is None
             or recipient is None
             or recipient.actor_id == discloser.actor_id
-            or discloser.role not in DISCLOSER_ROLES
-            or recipient.role not in RECIPIENT_ROLES
+            or not is_authorized(discloser.role, action)
+            or not can_receive_disclosure(recipient.role)
             or not is_disclosable_record(registry, action.evidence_id)
             # ``grants`` holds only strictly earlier events here: event-time access.
-            or action.evidence_id not in access_at(discloser.actor_id, base_acl, grants)
+            or not has_access(discloser.actor_id, action.evidence_id, base_acl, grants)
         ):
             raise ValueError(f"Event {event.sequence} is not a valid accepted disclosure")
         grants.setdefault(recipient.actor_id, {}).setdefault(action.evidence_id, event.sequence)
