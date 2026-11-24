@@ -5,6 +5,9 @@ a ``JurisdictionRuleset`` that sees only an immutable snapshot and may return pr
 findings; it can neither mutate state nor relax actor authority, evidence ACLs or
 structural reference checks.
 
+Out-of-schema proposals are refused with an exception before any of this runs (see
+``_canonical_proposal``); no event is recorded for them.
+
 Security checks run in a fixed order: role authorization from the authoritative,
 fail-closed table in ``indubio.core.authorization`` first, then structural reference and
 evidence-ACL checks, then the ruleset's procedural findings.
@@ -20,6 +23,7 @@ from indubio.core.disclosure import (
     is_disclosable_record,
 )
 from indubio.core.models import (
+    ACTION_TYPES,
     Actor,
     DiscloseEvidence,
     FileMotion,
@@ -56,6 +60,44 @@ def _snapshot_acl(
             raise TypeError("Evidence IDs must be non-empty strings")
         acl[actor_id] = snapshot
     return acl
+
+
+def _canonical_proposal(proposal: object) -> Proposal:
+    """A detached, schema-validated copy of ``proposal``, or an exception (no event).
+
+    This is the typed journal contract, enforced at the proposal boundary before the
+    ruleset runs or any history/state changes: what the engine records must reload from
+    the journal as the same typed action. A runtime action whose exact class is not an
+    ``Action`` schema member (a subclass, a foreign object, ``None``) raises ``TypeError``;
+    it would otherwise serialize as its canonical base class, or not reload at all, and
+    the recorded reason for a denial would be lost on replay. A schema-class action with
+    out-of-schema field values (e.g. built with ``model_construct``) raises ``ValueError``.
+
+    Distinct from authorization: a canonical schema action that simply lacks a policy
+    entry passes here and is denied as a normal, persistable rejected event
+    (``AUTH_ACTION_UNREGISTERED``).
+    """
+    if not isinstance(proposal, Proposal):
+        raise TypeError("Proposal must be a Proposal: no event was committed")
+    action = getattr(proposal, "action", None)
+    if type(action) not in ACTION_TYPES:
+        raise TypeError(
+            f"Action type {type(action).__qualname__!r} is not part of the Action schema: "
+            "no event was committed"
+        )
+    try:
+        # A JSON round trip is the journal's own encoding, so whatever is accepted here
+        # reloads as the same typed value. ``warnings=False``: malformed values surface
+        # as the validation error below, not as serializer warnings.
+        payload = proposal.model_dump_json(warnings=False)
+        canonical = Proposal.model_validate_json(payload)
+    except (ValueError, AttributeError) as error:  # ValidationError is a ValueError
+        raise ValueError(
+            "Proposal does not conform to the Action schema: no event was committed"
+        ) from error
+    if type(canonical.action) is not type(action):  # pragma: no cover - defensive
+        raise TypeError("Action changed type during validation: no event was committed")
+    return canonical
 
 
 class SimulationEngine:
@@ -181,7 +223,7 @@ class SimulationEngine:
 
     def propose(self, proposal: Proposal) -> TrialEvent:
         # Validate and record a private snapshot, never the caller's mutable object.
-        proposal = proposal.model_copy(deep=True)
+        proposal = _canonical_proposal(proposal)
         actor = self._actors.get(proposal.actor_id)
         if actor is None:
             raise PermissionError("Unknown actor: no event was committed")

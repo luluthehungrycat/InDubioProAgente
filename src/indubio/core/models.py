@@ -1,7 +1,7 @@
 """Model definitions: proposals, outcomes and events are intentionally distinct."""
 
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -95,6 +95,12 @@ Action = Annotated[
     | DiscloseEvidence,
     Field(discriminator="kind"),
 ]
+
+# The exact model classes of the ``Action`` union, derived from the schema itself so the
+# engine boundary and the authorization table cannot drift from the journal contract.
+# A runtime action whose class is not one of these (a subclass, a foreign object) is
+# outside the schema and is refused before any event exists.
+ACTION_TYPES: tuple[type[BaseModel], ...] = get_args(get_args(Action)[0])
 
 
 class Proposal(BaseModel):

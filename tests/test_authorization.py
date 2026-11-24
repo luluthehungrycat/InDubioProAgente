@@ -27,6 +27,7 @@ from indubio.core.disclosure import (
 )
 from indubio.core.engine import SimulationEngine
 from indubio.core.models import (
+    ACTION_TYPES,
     Action,
     Actor,
     DiscloseEvidence,
@@ -46,6 +47,7 @@ from indubio.core.models import (
 from indubio.evidence.models import EpistemicLayer, EvidenceRecord
 from indubio.evidence.registry import EvidenceRegistry
 from indubio.jurisdictions.demo import DEMO_METADATA
+from indubio.persistence.sqlite import EventStore
 
 J, P, D, A, W, O = (Role.JUDGE, Role.PROSECUTOR, Role.DEFENSE, Role.DEFENDANT,
                     Role.WITNESS, Role.HUMAN_OBSERVER)
@@ -123,7 +125,8 @@ def rules(event):
 
 def test_every_action_kind_in_the_union_is_registered():
     union = typing.get_args(typing.get_args(Action)[0])
-    assert set(union) == set(ACTION_POLICY)
+    assert ACTION_TYPES == union  # shared, schema-derived membership
+    assert set(ACTION_TYPES) == set(ACTION_POLICY)
     for model, permission in ACTION_POLICY.items():
         assert model.model_fields["kind"].default == permission.kind
 
@@ -163,7 +166,7 @@ def test_pure_lookup(kind, role):
         assert (finding.rule_id, finding.severity) == (rule_id, "security")
 
 
-# --- Fail closed for unregistered action kinds -------------------------------------------
+# --- Fail closed: missing policy vs out-of-schema runtime types -------------------------------------------
 
 class UnregisteredSpeak(Speak):
     """A subclass is not the registered class and must not inherit its permission."""
@@ -182,14 +185,74 @@ def test_unregistered_action_is_denied_for_every_role(role, action):
     assert (finding.rule_id, finding.severity) == (UNREGISTERED_ACTION_RULE_ID, "security")
 
 
+class SpyRuleset(PermissiveRuleset):
+    """Records whether the ruleset was consulted at all."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def evaluate(self, context, action):
+        self.calls += 1
+        return []
+
+
+def engine_state(engine):
+    return (engine.events, engine.phase, dict(engine._motions),
+            {k: dict(v) for k, v in engine._grants.items()})
+
+
+OUT_OF_SCHEMA = [UnregisteredSpeak(text="x"), ForeignAction(), None, {"kind": "speak",
+                                                                     "text": "x"}]
+
+
 @pytest.mark.parametrize("mode", list(Mode))
-def test_engine_rejects_unregistered_action_kind_in_every_mode(actors, registry, mode):
-    engine = make(actors, registry, mode)
-    proposal = Proposal.model_construct(actor_id="judge", action=UnregisteredSpeak(text="x"))
+@pytest.mark.parametrize("action", OUT_OF_SCHEMA,
+                         ids=["subclass", "foreign", "none", "dict"])
+def test_engine_refuses_out_of_schema_action_before_any_change(actors, registry, mode, action):
+    ruleset = SpyRuleset()
+    engine = make(actors, registry, mode, ruleset)
+    before, calls = engine_state(engine), ruleset.calls
+    proposal = Proposal.model_construct(actor_id="judge", action=action)
+    with pytest.raises(TypeError, match="not part of the Action schema"):
+        engine.propose(proposal)
+    assert engine_state(engine) == before and ruleset.calls == calls
+
+
+@pytest.mark.parametrize("mode", list(Mode))
+@pytest.mark.parametrize("action", [
+    Speak.model_construct(text=""),                       # violates min_length
+    Speak.model_construct(),                              # required field missing
+    MovePhase.model_construct(destination="nowhere"),     # not a Phase
+    Object.model_construct(target_event_sequence=0, grounds="g"),
+    RuleOnMotion.model_construct(motion_id="m", ruling="maybe", reasons="r"),
+    Speak.model_construct(text=123),                      # wrong type, no coercion
+], ids=["empty-text", "missing-field", "bad-phase", "bad-sequence", "bad-literal",
+        "wrong-type"])
+def test_engine_refuses_malformed_schema_action_before_any_change(
+    actors, registry, mode, action
+):
+    ruleset = SpyRuleset()
+    engine = make(actors, registry, mode, ruleset)
+    before, calls = engine_state(engine), ruleset.calls
+    with pytest.raises(ValueError, match="does not conform"):
+        engine.propose(Proposal.model_construct(actor_id="obs", action=action))
+    assert engine_state(engine) == before and ruleset.calls == calls
+
+
+def test_engine_refuses_non_proposal(actors, registry):
+    engine = make(actors, registry, Mode.STRICT)
+    before = engine_state(engine)
+    with pytest.raises(TypeError):
+        engine.propose({"actor_id": "judge", "action": {"kind": "speak", "text": "x"}})
+    assert engine_state(engine) == before
+
+
+def test_engine_records_canonical_copy_of_valid_action(actors, registry):
+    engine = make(actors, registry, Mode.STRICT)
+    proposal = Proposal.model_construct(
+        actor_id="judge", action=MovePhase.model_construct(destination="evidence"))
     event = engine.propose(proposal)
-    assert not event.accepted
-    assert rules(event)[0] == UNREGISTERED_ACTION_RULE_ID
-    assert engine.phase == Phase.OPENING
+    assert event.accepted and type(event.proposal.action.destination) is Phase
 
 
 def test_removing_a_policy_entry_fails_closed(actors, registry, monkeypatch):
@@ -199,6 +262,31 @@ def test_removing_a_policy_entry_fails_closed(actors, registry, monkeypatch):
     engine = SimulationEngine(actors, config, ruleset=PermissiveRuleset(), evidence=registry)
     event = engine.propose(Proposal(actor_id="judge", action=Speak(text="x")))
     assert not event.accepted and rules(event) == [UNREGISTERED_ACTION_RULE_ID]
+
+
+@pytest.mark.parametrize("mode", list(Mode))
+def test_missing_policy_rejection_round_trips_through_sqlite(
+    actors, registry, monkeypatch, tmp_path, mode
+):
+    """A canonical schema action without a policy entry is a normal rejected event."""
+    shrunk = {k: v for k, v in ACTION_POLICY.items() if k is not Speak}
+    monkeypatch.setattr(authorization, "ACTION_POLICY", shrunk)
+    config = SimulationConfig(jurisdiction="test-permissive", mode=mode)
+    engine = SimulationEngine(actors, config, ruleset=PermissiveRuleset(), evidence=registry)
+    event = engine.propose(Proposal(actor_id="judge", action=Speak(text="x")))
+    assert not event.accepted and rules(event) == [UNREGISTERED_ACTION_RULE_ID]
+    assert engine.phase == Phase.OPENING
+
+    store = EventStore(tmp_path / "events.sqlite3")
+    try:
+        store.append("case", event)
+        (loaded,) = store.load("case")
+    finally:
+        store.close()
+    assert loaded == event == engine.events[-1]
+    assert type(loaded.proposal.action) is Speak
+    assert [(f.rule_id, f.severity) for f in loaded.findings] == [
+        (UNREGISTERED_ACTION_RULE_ID, "security")]
 
 
 # --- Engine: every role x action kind x mode ---------------------------------------------

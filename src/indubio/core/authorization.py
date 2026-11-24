@@ -42,10 +42,17 @@ are unchanged, including witness speech and witness evidence submission (still g
 the evidence ACL).
 
 **Fail closed.** Authorization is looked up by the action's exact registered model class.
-An action whose class is not registered here (for example a new ``Action`` member added
-without a policy entry, or a subclass of a registered model) is denied with
-``AUTH_ACTION_UNREGISTERED`` for every role. A role outside a permission's set is denied;
-there is no default-allow.
+A canonical ``Action`` schema member without a policy entry here (for example a new union
+member added without one) is denied with ``AUTH_ACTION_UNREGISTERED`` for every role, as
+a normal rejected event that persists and reloads from the journal. A role outside a
+permission's set is denied; there is no default-allow. The table may only name schema
+members (``models.ACTION_TYPES``); this is checked at import.
+
+Runtime objects *outside* the schema (a subclass of a registered model, a foreign object,
+``None``) never reach this table through the engine: ``SimulationEngine.propose`` refuses
+them at the proposal boundary with ``TypeError`` before the ruleset runs or any event or
+state exists, because they could not be journaled faithfully. The pure lookups below
+still return "no permission" for them.
 
 **Finding order.** The role finding, if any, is reported first and the engine's evidence
 and reference checks still run afterwards, matching the order the engine used before this
@@ -58,6 +65,7 @@ from types import MappingProxyType
 from pydantic import BaseModel, ConfigDict, Field
 
 from indubio.core.models import (
+    ACTION_TYPES,
     DiscloseEvidence,
     FileMotion,
     MovePhase,
@@ -126,6 +134,9 @@ ACTION_POLICY: Mapping[type[BaseModel], ActionPermission] = MappingProxyType({
         description="Role cannot disclose evidence in this starter model",
     ),
 })
+
+if not set(ACTION_POLICY) <= set(ACTION_TYPES):  # pragma: no cover - import-time guard
+    raise TypeError("ACTION_POLICY may only name Action schema members")
 
 DISCLOSURE_RECIPIENT_ROLES = frozenset({
     Role.JUDGE, Role.PROSECUTOR, Role.DEFENSE, Role.DEFENDANT,
