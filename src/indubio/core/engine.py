@@ -33,11 +33,14 @@ from indubio.core.models import (
     Phase,
     Proposal,
     RuleFinding,
+    ScenarioIdentity,
+    ScenarioProvenance,
     SimulationConfig,
     SubmitEvidence,
     TrialEvent,
 )
 from indubio.core.projection import PerspectiveProjection, build_projection
+from indubio.core.provenance import scenario_provenance
 from indubio.evidence.models import EvidenceRecord
 from indubio.evidence.registry import EvidenceRegistry
 from indubio.jurisdictions.base import JurisdictionRuleset, RuleContext
@@ -109,6 +112,7 @@ class SimulationEngine:
         *,
         ruleset: JurisdictionRuleset | None = None,
         evidence: EvidenceRegistry | None = None,
+        scenario: ScenarioIdentity | None = None,
     ) -> None:
         # Snapshot caller-owned models so later mutation cannot change authority.
         actor_list = [actor.model_copy(deep=True) for actor in actors]
@@ -149,6 +153,26 @@ class SimulationEngine:
         else:
             # Legacy pattern: bare per-actor ID grants without records (snapshotted).
             self._evidence_acl = _snapshot_acl(available_evidence or {}, self._actors)
+        # Scenario provenance is computed here, from the engine's own snapshots, so the
+        # digest describes exactly the setup this engine runs (never a caller's claim).
+        self._scenario: ScenarioProvenance | None = None
+        if scenario is not None:
+            if available_evidence is not None:
+                # A bare-ID ACL has no records to bind; refuse instead of a digest that
+                # silently omits the evidence setup.
+                raise ValueError("Scenario provenance requires an evidence registry")
+            self._scenario = scenario_provenance(
+                scenario, self.config.jurisdiction, self._actors.values(), self._evidence
+            )
+
+    @property
+    def scenario_provenance(self) -> ScenarioProvenance | None:
+        """Trusted audit API: the provenance stamped on every event, or ``None``.
+
+        Not an actor view: the setup digest covers sealed content (see
+        ``indubio.core.provenance``).
+        """
+        return self._scenario
 
     @property
     def ruleset(self) -> JurisdictionRuleset:
@@ -306,6 +330,7 @@ class SimulationEngine:
                       "ruleset": self._ruleset_metadata.ruleset_id,
                       "ruleset_version": self._ruleset_metadata.version,
                       "ruleset_validation": self._ruleset_metadata.validation_status},
+            scenario=self._scenario,
         )
         result = event.model_copy(deep=True)
 
