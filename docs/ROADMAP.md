@@ -12,7 +12,7 @@
 - [ ] Scenario manifests, sealed truth and scoped evidence registry with disclosure events (partial: immutable scoped `EvidenceRegistry` with sealed hidden truth; typed/versioned synthetic `ScenarioManifest`; illustrative accepted/rejected `DiscloseEvidence` events with event-time projection. No real-case import, dated/timed disclosures, existence-vs-contents distinction or source-backed disclosure rules)
 - [ ] Ruleset interface with source provenance and time-effective versions (partial: versioned `JurisdictionRuleset` protocol and metadata; demonstrator pack only, no effective-date selection)
 - [ ] Independent perspective projection for each actor, including confidential consultations (partial: deterministic redacted per-actor projections over committed events, the scoped evidence registry and disclosure grants; no confidential consultation channels yet)
-- [ ] Persist actor state and replay deterministically; concurrency tests (partial: versioned scenario provenance with a deterministic setup digest on every committed event; no engine restoration from a journal yet)
+- [ ] Persist actor state and replay deterministically; concurrency tests (partial: versioned scenario provenance with a deterministic setup digest on every committed event; deterministic engine restoration from a trusted SQLite journal plus matching synthetic manifest by regenerate-and-compare, refusing inconsistent, mixed-mode, other-ruleset-version and legacy unstamped journals. No actor state beyond the engine, migrations, tamper evidence or concurrency tests yet)
 - [ ] **Proposed:** source/provenance and event-time schema for imported cases; distinguish source material, extracted claims, synthetic supplements and hindsight-only outcome
 - [ ] **Proposed:** typed version-pinned legal lookup contract separating court normative rules from actors' fallible legal research
 
@@ -49,4 +49,4 @@
 - [Legal knowledge service / german-legal-rag](LEGAL_KNOWLEDGE.md)
 - [Interruptions, streaming speech and human participation](LIVE_RUNTIME.md)
 
-**Next recommended PR:** deterministic engine-state restoration from a trusted journal and a matching scenario (reject a journal whose event `scenario` provenance differs in any field from the scenario's). Avoid claiming StPO accuracy before official-source verification.
+**Next recommended PR:** to be decided (candidates: speaking queue and interrupt/response actions, or a tamper-evident journal hash chain on top of restoration). Avoid claiming StPO accuracy before official-source verification.

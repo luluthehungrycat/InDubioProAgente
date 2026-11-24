@@ -1,4 +1,8 @@
-"""Append-only SQLite event journal. Replay is deliberately explicit."""
+"""Append-only SQLite event journal. Replay is deliberately explicit.
+
+Scenario restoration lives in ``indubio.scenarios.restore``; this module only stores and
+loads payloads and never interprets them.
+"""
 
 import sqlite3
 from pathlib import Path
@@ -32,6 +36,17 @@ class EventStore:
             (simulation_id,),
         ).fetchall()
         return [TrialEvent.model_validate_json(row[0]) for row in rows]
+
+    def load_keyed(self, simulation_id: str) -> list[tuple[int, TrialEvent]]:
+        """Like ``load``, but pairs each event with its stored ``sequence`` key (read-only).
+
+        Used by restoration to check the row key against the payload's own sequence.
+        """
+        rows = self.connection.execute(
+            "SELECT sequence, payload FROM events WHERE simulation_id = ? ORDER BY sequence",
+            (simulation_id,),
+        ).fetchall()
+        return [(row[0], TrialEvent.model_validate_json(row[1])) for row in rows]
 
     def close(self) -> None:
         self.connection.close()

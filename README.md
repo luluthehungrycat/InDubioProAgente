@@ -31,6 +31,28 @@ python -m indubio scenario-demo --mode strict --perspective pros
 
 The demo runs entirely offline with scripted actions and prints a JSON event transcript (the trusted, unredacted audit history). Add `--perspective defense` (or another demo actor ID) to also print that actor's redacted perspective projection. `scenario-demo` initializes actors and sealed/scoped evidence from the bundled synthetic manifest (`src/indubio/scenarios/fixtures/synthetic_disclosure_demo.json`) and runs a scripted sequence of accepted and rejected evidence disclosures (illustrative policy only, not StPO). Each `scenario-demo` event also carries trusted scenario provenance (scenario ID, version and a deterministic setup digest); it is never shown in perspective projections. No API keys required. LLM and Hermes adapters are design seams, not yet operational.
 
+### Restoring from a journal
+
+```python
+from indubio.core.models import Mode, MovePhase, Phase, Proposal
+from indubio.persistence.sqlite import EventStore
+from indubio.scenarios import load_bundled_manifest, restore_from_store
+from indubio.scenarios.demo import run_scenario_demo
+
+engine = run_scenario_demo(Mode.STRICT)
+store = EventStore("journal.sqlite3")
+for event in engine.events:
+    store.append("demo-1", event)
+
+# Fresh engine rebuilt from the manifest by re-proposing every journaled proposal; raises
+# RestoreError (no engine) unless each regenerated event equals the recorded one.
+restored = restore_from_store(store, "demo-1", load_bundled_manifest())
+event = restored.propose(Proposal(actor_id="judge", action=MovePhase(destination=Phase.JUDGMENT)))
+store.append("demo-1", event)  # sequence continues at len(engine.events) + 1
+```
+
+Restoration checks consistency against the scenario, ruleset version and mode, not authenticity: the journal is not tamper-evident. Journals without scenario provenance remain loadable with `EventStore.load` but raise `LegacyJournalError` on restore.
+
 ## Principles
 
 - **Deterministic enforcement, fallible simulated participants.** Security boundaries are always enforced; procedural violations may be blocked or logged and allowed depending on mode.

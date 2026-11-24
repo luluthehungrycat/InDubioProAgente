@@ -5,7 +5,7 @@ was this engine running?* It is trusted engine metadata, never actor input, and 
 never projected to actors (see "Privacy" below).
 
 A ``ScenarioProvenance`` has two independent parts, and a consumer that checks a journal
-against a scenario (planned: engine restoration from a journal) must compare **all**
+against a scenario (``indubio.scenarios.restore``) must compare **all**
 fields exactly:
 
 * **Identity**, as declared by the scenario author: ``scenario_schema_version``,
@@ -46,7 +46,8 @@ trusted audit data like the rest of the journal and must not be shown to actors.
 Projections never include event ``scenario`` provenance or ``metadata``.
 
 Not covered: the digest binds setup content, not authorship or integrity of the journal
-(not tamper-evident, no signature), and it does not restore engine state.
+(not tamper-evident, no signature). Restoring engine state from a journal is
+``indubio.scenarios.restore``, which checks this provenance and regenerates every event.
 """
 
 import hashlib
