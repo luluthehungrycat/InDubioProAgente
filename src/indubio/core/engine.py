@@ -4,18 +4,26 @@ The engine owns state, security checks and acceptance. Procedural checks are del
 a ``JurisdictionRuleset`` that sees only an immutable snapshot and may return procedural
 findings; it can neither mutate state nor relax actor authority, evidence ACLs or
 structural reference checks.
+
+Out-of-schema proposals are refused with an exception before any of this runs (see
+``_canonical_proposal``); no event is recorded for them.
+
+Security checks run in a fixed order: role authorization from the authoritative,
+fail-closed table in ``indubio.core.authorization`` first, then structural reference and
+evidence-ACL checks, then the ruleset's procedural findings.
 """
 
 from collections.abc import Iterable, Mapping
 
+from indubio.core.authorization import authorization_finding, recipient_finding
 from indubio.core.disclosure import (
-    DISCLOSER_ROLES,
-    RECIPIENT_ROLES,
     Grants,
     access_at,
+    has_access,
     is_disclosable_record,
 )
 from indubio.core.models import (
+    ACTION_TYPES,
     Actor,
     DiscloseEvidence,
     FileMotion,
@@ -24,9 +32,7 @@ from indubio.core.models import (
     Object,
     Phase,
     Proposal,
-    Role,
     RuleFinding,
-    RuleOnMotion,
     SimulationConfig,
     SubmitEvidence,
     TrialEvent,
@@ -54,6 +60,44 @@ def _snapshot_acl(
             raise TypeError("Evidence IDs must be non-empty strings")
         acl[actor_id] = snapshot
     return acl
+
+
+def _canonical_proposal(proposal: object) -> Proposal:
+    """A detached, schema-validated copy of ``proposal``, or an exception (no event).
+
+    This is the typed journal contract, enforced at the proposal boundary before the
+    ruleset runs or any history/state changes: what the engine records must reload from
+    the journal as the same typed action. A runtime action whose exact class is not an
+    ``Action`` schema member (a subclass, a foreign object, ``None``) raises ``TypeError``;
+    it would otherwise serialize as its canonical base class, or not reload at all, and
+    the recorded reason for a denial would be lost on replay. A schema-class action with
+    out-of-schema field values (e.g. built with ``model_construct``) raises ``ValueError``.
+
+    Distinct from authorization: a canonical schema action that simply lacks a policy
+    entry passes here and is denied as a normal, persistable rejected event
+    (``AUTH_ACTION_UNREGISTERED``).
+    """
+    if not isinstance(proposal, Proposal):
+        raise TypeError("Proposal must be a Proposal: no event was committed")
+    action = getattr(proposal, "action", None)
+    if type(action) not in ACTION_TYPES:
+        raise TypeError(
+            f"Action type {type(action).__qualname__!r} is not part of the Action schema: "
+            "no event was committed"
+        )
+    try:
+        # A JSON round trip is the journal's own encoding, so whatever is accepted here
+        # reloads as the same typed value. ``warnings=False``: malformed values surface
+        # as the validation error below, not as serializer warnings.
+        payload = proposal.model_dump_json(warnings=False)
+        canonical = Proposal.model_validate_json(payload)
+    except (ValueError, AttributeError) as error:  # ValidationError is a ValueError
+        raise ValueError(
+            "Proposal does not conform to the Action schema: no event was committed"
+        ) from error
+    if type(canonical.action) is not type(action):  # pragma: no cover - defensive
+        raise TypeError("Action changed type during validation: no event was committed")
+    return canonical
 
 
 class SimulationEngine:
@@ -113,6 +157,9 @@ class SimulationEngine:
     def _access(self, actor_id: str) -> frozenset[str]:
         """Current access: scenario grants plus accepted disclosures so far."""
         return access_at(actor_id, self._evidence_acl, self._grants)
+
+    def _has_access(self, actor_id: str, evidence_id: str) -> bool:
+        return has_access(actor_id, evidence_id, self._evidence_acl, self._grants)
 
     def evidence_view(self, actor_id: str) -> list[EvidenceRecord]:
         """Detached copies of the records a known actor can *currently* see.
@@ -176,7 +223,7 @@ class SimulationEngine:
 
     def propose(self, proposal: Proposal) -> TrialEvent:
         # Validate and record a private snapshot, never the caller's mutable object.
-        proposal = proposal.model_copy(deep=True)
+        proposal = _canonical_proposal(proposal)
         actor = self._actors.get(proposal.actor_id)
         if actor is None:
             raise PermissionError("Unknown actor: no event was committed")
@@ -189,36 +236,27 @@ class SimulationEngine:
                                         severity="security"))
 
         # Never loosen security or actor authority merely by selecting realistic mode.
-        if isinstance(action, SubmitEvidence):
-            if action.evidence_id not in self._access(actor.actor_id):
-                security("ACL_EVIDENCE", "Actor cannot access or introduce this evidence ID")
+        # 1. Role authorization from the authoritative, fail-closed policy table.
+        authorization = authorization_finding(actor.role, action)
+        if authorization is not None:
+            findings.append(authorization)
+        # 2. Structural reference and evidence-ACL checks, independent of role.
+        if isinstance(action, SubmitEvidence) and not self._has_access(
+            actor.actor_id, action.evidence_id
+        ):
+            security("ACL_EVIDENCE", "Actor cannot access or introduce this evidence ID")
         if isinstance(action, DiscloseEvidence):
-            if actor.role not in DISCLOSER_ROLES:
-                security("AUTH_DISCLOSE", "Role cannot disclose evidence in this starter model")
             recipient = self._actors.get(action.recipient_actor_id)
             if recipient is None or recipient.actor_id == actor.actor_id:
                 security("REFERENCE_ACTOR", "Recipient must be another known actor")
-            elif recipient.role not in RECIPIENT_ROLES:
-                security("AUTH_DISCLOSE_RECIPIENT",
-                         "Recipient role cannot receive disclosures in this starter model")
-            if action.evidence_id not in self._access(actor.actor_id):
+            elif (recipient_denied := recipient_finding(recipient.role)) is not None:
+                findings.append(recipient_denied)
+            if not self._has_access(actor.actor_id, action.evidence_id):
                 # Same finding for unknown, sealed and inaccessible IDs: no oracle.
                 security("ACL_EVIDENCE", "Actor cannot access or disclose this evidence ID")
             elif not is_disclosable_record(self._evidence, action.evidence_id):
                 security("DISCLOSE_RECORD_REQUIRED",
                          "Only registry-backed evidence records can be disclosed")
-        if isinstance(action, RuleOnMotion) and actor.role != Role.JUDGE:
-            security("AUTH_RULING", "Only a judge can issue rulings")
-        if isinstance(action, MovePhase) and actor.role != Role.JUDGE:
-            security("AUTH_PHASE", "Only a judge can direct phase transitions")
-        if isinstance(action, FileMotion) and actor.role not in {
-            Role.DEFENSE, Role.PROSECUTOR, Role.DEFENDANT
-        }:
-            security("AUTH_MOTION", "Role cannot file motions in this starter model")
-        if isinstance(action, Object) and actor.role not in {
-            Role.DEFENSE, Role.PROSECUTOR, Role.DEFENDANT
-        }:
-            security("AUTH_OBJECTION", "Role cannot lodge objections in starter model")
         if isinstance(action, Object) and not (
             1 <= action.target_event_sequence <= len(self._events)
         ):
