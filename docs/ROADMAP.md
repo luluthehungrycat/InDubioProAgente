@@ -9,8 +9,8 @@
 
 ## Phase 1 — deterministic courtroom kernel
 - [ ] Explicit per-role action permissions, speaking queue and interrupt/response actions
-- [ ] Scenario manifests, sealed truth and scoped evidence registry with disclosure events
-- [ ] Ruleset interface with source provenance and time-effective versions
+- [ ] Scenario manifests, sealed truth and scoped evidence registry with disclosure events (partial: immutable scoped `EvidenceRegistry` with sealed hidden truth; no manifests or disclosure events yet)
+- [ ] Ruleset interface with source provenance and time-effective versions (partial: versioned `JurisdictionRuleset` protocol and metadata; demonstrator pack only, no effective-date selection)
 - [ ] Independent perspective projection for each actor, including confidential consultations
 - [ ] Persist actor state and replay deterministically; concurrency tests
 - [ ] **Proposed:** source/provenance and event-time schema for imported cases; distinguish source material, extracted claims, synthetic supplements and hindsight-only outcome

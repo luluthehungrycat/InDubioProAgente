@@ -41,6 +41,12 @@
 ## State and event contracts
 `Proposal` is an actor-attributed request. A fixed security layer rejects unauthorized operations in all modes. A rule evaluator returns findings without claiming to be a judicial decision. The engine determines allowed state transitions for the selected simulation mode and appends `TrialEvent` including accepted status, before/after phase and findings. An event can represent a rejected *attempt*; it must not be mistaken for an accepted act. Each rule and simulator version should be recorded for future replay/migrations.
 
+### Implemented seams (Phase 1, offline)
+- **`JurisdictionRuleset`** (`indubio.jurisdictions.base`): a protocol with frozen `RulesetMetadata` (id, version, validation status, optional effective date and sources) and `evaluate(RuleContext, action) -> list[RuleFinding]`. The ruleset receives a frozen snapshot and a copy of the action, may return *procedural* findings only, and never mutates state or decides acceptance. The engine resolves rulesets by `SimulationConfig.jurisdiction` and fails on unknown IDs rather than falling back. Events record `ruleset`, `ruleset_version` and `ruleset_validation`.
+- The only registered pack is `de-criminal-demo-unvalidated` (`indubio.jurisdictions.demo`): the original schematic phase/motion checks, marked `unvalidated_demonstrator`, with no legal sources. It is **not** StPO procedure.
+- The engine keeps actor authorization, evidence ACL and structural reference checks itself; they run before and independently of the ruleset in every mode.
+- **`EvidenceRegistry`** (`indubio.evidence.registry`): immutable, deep-copied snapshot of `EvidenceRecord`s with actor-scoped views. `HIDDEN_TRUTH` records never appear in any view and are never submittable. When a registry is passed to the engine, the evidence ACL is derived from these scoped views; the legacy `available_evidence` mapping (ID grants without records) is still accepted, snapshotted and type-checked, but the two cannot be combined.
+
 ## Planned runtime adapters
 - **Native LLM:** provider-agnostic structured outputs and model/version metadata, cost limits, schema validation, retries with bounded budgets.
 - **Hermes Agent:** separate profiles / SOUL.md / memory backends; strict scoped capabilities, ephemeral credentials, least privilege and prompt-injection defenses.
