@@ -28,7 +28,7 @@ python -m pytest
 python -m indubio demo
 ```
 
-The demo runs entirely offline with scripted actions and prints a JSON event transcript. No API keys required. LLM and Hermes adapters are design seams, not yet operational.
+The demo runs entirely offline with scripted actions and prints a JSON event transcript (the trusted, unredacted audit history). Add `--perspective defense` (or another demo actor ID) to also print that actor's redacted perspective projection. No API keys required. LLM and Hermes adapters are design seams, not yet operational.
 
 ## Principles
 
