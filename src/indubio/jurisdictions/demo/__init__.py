@@ -3,6 +3,7 @@
 from indubio.core.models import (
     PHASES,
     Action,
+    DiscloseEvidence,
     FileMotion,
     MovePhase,
     Phase,
@@ -17,7 +18,7 @@ DEMO_RULESET_ID = "de-criminal-demo-unvalidated"
 
 DEMO_METADATA = RulesetMetadata(
     ruleset_id=DEMO_RULESET_ID,
-    version="0.1.0-demo",
+    version="0.2.0-demo",
     title="Schematic demonstrator phase and motion checks",
     validation_status="unvalidated_demonstrator",
     disclaimer=(
@@ -31,8 +32,12 @@ def _procedural(rule_id: str, description: str) -> RuleFinding:
     return RuleFinding(rule_id=rule_id, description=description, severity="procedural")
 
 
+DISCLOSURE_PHASES = frozenset({Phase.OPENING, Phase.EVIDENCE})
+
+
 class DemoRuleset:
-    """The pre-extraction demonstrator rules, unchanged in IDs, order and wording."""
+    """Pre-extraction demonstrator rules (unchanged IDs, order, wording) plus, since
+    0.2.0-demo, one illustrative disclosure-timing rule for the new action kind."""
 
     @property
     def metadata(self) -> RulesetMetadata:
@@ -58,5 +63,9 @@ class DemoRuleset:
         if isinstance(action, Speak) and context.phase == Phase.FINISHED:
             findings.append(_procedural(
                 "DEMO_AFTER_FINISH", "Speech after close of demonstrator proceeding"
+            ))
+        if isinstance(action, DiscloseEvidence) and context.phase not in DISCLOSURE_PHASES:
+            findings.append(_procedural(
+                "DEMO_DISCLOSURE_PHASE", "Disclosure outside demonstrator disclosure phases"
             ))
         return findings

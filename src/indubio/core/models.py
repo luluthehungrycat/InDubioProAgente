@@ -69,6 +69,21 @@ class FileMotion(BaseModel):
     grounds: str = Field(min_length=1)
 
 
+class DiscloseEvidence(BaseModel):
+    """Grant one known recipient access to one evidence record the discloser holds.
+
+    Single recipient by design: a multi-recipient payload would tell each recipient who
+    else received the record. The engine validates authority, record existence and the
+    discloser's current access in every mode; see ``indubio.core.disclosure``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["disclose_evidence"] = "disclose_evidence"
+    evidence_id: str = Field(min_length=1)
+    recipient_actor_id: str = Field(min_length=1)
+
+
 class Object(BaseModel):
     kind: Literal["object"] = "object"
     target_event_sequence: int = Field(ge=1)
@@ -76,7 +91,8 @@ class Object(BaseModel):
 
 
 Action = Annotated[
-    Speak | SubmitEvidence | MovePhase | RuleOnMotion | FileMotion | Object,
+    Speak | SubmitEvidence | MovePhase | RuleOnMotion | FileMotion | Object
+    | DiscloseEvidence,
     Field(discriminator="kind"),
 ]
 

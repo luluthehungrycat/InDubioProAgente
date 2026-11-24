@@ -9,9 +9,9 @@
 
 ## Phase 1 — deterministic courtroom kernel
 - [ ] Explicit per-role action permissions, speaking queue and interrupt/response actions
-- [ ] Scenario manifests, sealed truth and scoped evidence registry with disclosure events (partial: immutable scoped `EvidenceRegistry` with sealed hidden truth; no manifests or disclosure events yet)
+- [ ] Scenario manifests, sealed truth and scoped evidence registry with disclosure events (partial: immutable scoped `EvidenceRegistry` with sealed hidden truth; typed/versioned synthetic `ScenarioManifest`; illustrative accepted/rejected `DiscloseEvidence` events with event-time projection. No real-case import, dated/timed disclosures, existence-vs-contents distinction or source-backed disclosure rules)
 - [ ] Ruleset interface with source provenance and time-effective versions (partial: versioned `JurisdictionRuleset` protocol and metadata; demonstrator pack only, no effective-date selection)
-- [ ] Independent perspective projection for each actor, including confidential consultations (partial: deterministic redacted per-actor projections over committed events and the scoped evidence registry; no confidential consultation channels or disclosure events yet)
+- [ ] Independent perspective projection for each actor, including confidential consultations (partial: deterministic redacted per-actor projections over committed events, the scoped evidence registry and disclosure grants; no confidential consultation channels yet)
 - [ ] Persist actor state and replay deterministically; concurrency tests
 - [ ] **Proposed:** source/provenance and event-time schema for imported cases; distinguish source material, extracted claims, synthetic supplements and hindsight-only outcome
 - [ ] **Proposed:** typed version-pinned legal lookup contract separating court normative rules from actors' fallible legal research
@@ -49,4 +49,4 @@
 - [Legal knowledge service / german-legal-rag](LEGAL_KNOWLEDGE.md)
 - [Interruptions, streaming speech and human participation](LIVE_RUNTIME.md)
 
-**Next recommended PR:** a synthetic scenario manifest and explicit evidence disclosure events built on the projection API. Avoid claiming StPO accuracy before official-source verification.
+**Next recommended PR:** explicit per-role action permissions and/or scenario provenance stamped on events, plus deterministic engine-state replay from the journal. Avoid claiming StPO accuracy before official-source verification.

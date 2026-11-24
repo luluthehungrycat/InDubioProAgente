@@ -11,13 +11,22 @@ from indubio.core.models import (
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="InDubioProAgente experimental kernel")
-    parser.add_argument("command", choices=["demo"])
+    parser.add_argument("command", choices=["demo", "scenario-demo"])
     parser.add_argument("--mode", choices=[mode.value for mode in Mode], default="realistic")
     parser.add_argument(
         "--perspective", metavar="ACTOR_ID",
         help="also print the redacted projection for one synthetic actor",
     )
     args = parser.parse_args()
+    if args.command == "scenario-demo":
+        # Imported lazily so the default demo path is unchanged.
+        from indubio.scenarios.demo import run_scenario_demo
+
+        engine = run_scenario_demo(Mode(args.mode))
+        for event in engine.events:
+            print(event.model_dump_json())
+        _print_perspective(parser, engine, args.perspective)
+        return
     actors = [
         Actor(actor_id="judge", role=Role.JUDGE, display_name="Judge"),
         Actor(actor_id="defense", role=Role.DEFENSE, display_name="Defense"),
@@ -35,11 +44,18 @@ def main() -> None:
     ]
     for action in actions:
         print(engine.propose(action).model_dump_json())
-    if args.perspective is not None:
-        try:
-            print(engine.perspective(args.perspective).model_dump_json())
-        except PermissionError as error:
-            parser.exit(2, f"error: {error}\n")
+    _print_perspective(parser, engine, args.perspective)
+
+
+def _print_perspective(
+    parser: argparse.ArgumentParser, engine: SimulationEngine, actor_id: str | None
+) -> None:
+    if actor_id is None:
+        return
+    try:
+        print(engine.perspective(actor_id).model_dump_json())
+    except PermissionError as error:
+        parser.exit(2, f"error: {error}\n")
 
 
 if __name__ == "__main__":

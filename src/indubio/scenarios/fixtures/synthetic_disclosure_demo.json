@@ -1,0 +1,53 @@
+{
+  "schema_version": "indubio.scenario/1",
+  "scenario_id": "synthetic-disclosure-demo",
+  "scenario_version": "1.0.0",
+  "title": "Synthetic evidence-disclosure demonstrator",
+  "synthetic": true,
+  "disclaimer": "Entirely fictional actors and evidence for testing the engine only. No real persons, no legal characterization, not legal advice, and no validated procedure.",
+  "jurisdiction": "de-criminal-demo-unvalidated",
+  "actors": [
+    {"actor_id": "judge", "role": "judge", "display_name": "Synthetic Judge"},
+    {"actor_id": "pros", "role": "prosecutor", "display_name": "Synthetic Prosecutor"},
+    {"actor_id": "def", "role": "defense", "display_name": "Synthetic Defense Counsel"},
+    {"actor_id": "acc", "role": "defendant", "display_name": "Synthetic Accused"},
+    {"actor_id": "wit", "role": "witness", "display_name": "Synthetic Witness"},
+    {"actor_id": "obs", "role": "human_observer", "display_name": "Synthetic Observer"}
+  ],
+  "evidence": [
+    {
+      "evidence_id": "ex-receipt",
+      "summary": "SYNTHETIC: order confirmation for a fictional software activation key",
+      "layer": "disclosed",
+      "visible_to_actor_ids": ["judge", "pros", "def", "acc"],
+      "provenance": "synthetic fixture"
+    },
+    {
+      "evidence_id": "pros-vendor-log",
+      "summary": "SYNTHETIC: fictional reseller account log held by the prosecution",
+      "layer": "actor_knowledge",
+      "visible_to_actor_ids": ["pros"],
+      "provenance": "synthetic fixture"
+    },
+    {
+      "evidence_id": "pros-internal-note",
+      "summary": "SYNTHETIC: internal prosecution working note (never disclosed in the demo)",
+      "layer": "actor_knowledge",
+      "visible_to_actor_ids": ["pros"],
+      "provenance": "synthetic fixture"
+    },
+    {
+      "evidence_id": "def-chat-export",
+      "summary": "SYNTHETIC: fictional chat export held by the defense and the accused",
+      "layer": "actor_knowledge",
+      "visible_to_actor_ids": ["def", "acc"],
+      "provenance": "synthetic fixture"
+    },
+    {
+      "evidence_id": "sealed-origin",
+      "summary": "SYNTHETIC SEALED TRUTH: the fictional key's actual origin (evaluator-only)",
+      "layer": "hidden_truth",
+      "visible_to_actor_ids": []
+    }
+  ]
+}

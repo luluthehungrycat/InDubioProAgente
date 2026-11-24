@@ -26,9 +26,10 @@ source .venv/bin/activate
 python -m pip install -e ".[dev]"
 python -m pytest
 python -m indubio demo
+python -m indubio scenario-demo --mode strict --perspective pros
 ```
 
-The demo runs entirely offline with scripted actions and prints a JSON event transcript (the trusted, unredacted audit history). Add `--perspective defense` (or another demo actor ID) to also print that actor's redacted perspective projection. No API keys required. LLM and Hermes adapters are design seams, not yet operational.
+The demo runs entirely offline with scripted actions and prints a JSON event transcript (the trusted, unredacted audit history). Add `--perspective defense` (or another demo actor ID) to also print that actor's redacted perspective projection. `scenario-demo` initializes actors and sealed/scoped evidence from the bundled synthetic manifest (`src/indubio/scenarios/fixtures/synthetic_disclosure_demo.json`) and runs a scripted sequence of accepted and rejected evidence disclosures (illustrative policy only, not StPO). No API keys required. LLM and Hermes adapters are design seams, not yet operational.
 
 ## Principles
 
