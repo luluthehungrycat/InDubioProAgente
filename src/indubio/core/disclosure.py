@@ -57,16 +57,17 @@ def derive_grants(
     actors: Mapping[str, Actor],
     base_acl: Mapping[str, frozenset[str]],
     registry: EvidenceRegistry,
-) -> list[Grants]:
-    """Grants in force *before* each event (index i -> before ``events[i]``), plus final.
+) -> Grants:
+    """Grants from all accepted disclosures in ``events``, in one linear pass.
 
-    Revalidates every accepted disclosure against the structural policy and raises
-    ``ValueError`` on a history the engine could not have produced (fail closed).
+    Each grant records the sequence of the first accepted disclosure to that actor, so
+    the grants in force *before* event ``n`` are exactly those with sequence ``< n``;
+    callers derive event-time access from that instead of copying the whole grant map
+    per event. Revalidates every accepted disclosure against the structural policy and
+    raises ``ValueError`` on a history the engine could not have produced (fail closed).
     """
     grants: Grants = {}
-    timeline: list[Grants] = []
     for event in events:
-        timeline.append({actor: dict(ids) for actor, ids in grants.items()})
         action = event.proposal.action
         if not (event.accepted and isinstance(action, DiscloseEvidence)):
             continue
@@ -79,9 +80,9 @@ def derive_grants(
             or discloser.role not in DISCLOSER_ROLES
             or recipient.role not in RECIPIENT_ROLES
             or not is_disclosable_record(registry, action.evidence_id)
+            # ``grants`` holds only strictly earlier events here: event-time access.
             or action.evidence_id not in access_at(discloser.actor_id, base_acl, grants)
         ):
             raise ValueError(f"Event {event.sequence} is not a valid accepted disclosure")
         grants.setdefault(recipient.actor_id, {}).setdefault(action.evidence_id, event.sequence)
-    timeline.append(grants)
-    return timeline
+    return grants

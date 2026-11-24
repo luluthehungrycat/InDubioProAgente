@@ -98,8 +98,12 @@ def test_accepted_disclosure_grants_recipient_access(actors, registry, mode):
     assert "pros-log" in engine.perspective("pros").accessible_evidence_ids
     for viewer in ["judge", "acc", "wit", "obs"]:
         assert "pros-log" not in engine.perspective(viewer).accessible_evidence_ids
-    # The immutable scenario-initial view is unchanged.
-    assert "pros-log" not in [r.evidence_id for r in engine.evidence_view("def")]
+    # Current view includes the received record without revealing its other holders;
+    # the scenario-initial view is unchanged.
+    current = {r.evidence_id: r for r in engine.evidence_view("def")}
+    assert current["pros-log"].summary == "Synthetic prosecution log"
+    assert current["pros-log"].visible_to_actor_ids == set()
+    assert "pros-log" not in [r.evidence_id for r in engine.initial_evidence_view("def")]
     # The recipient can now introduce it.
     propose(engine, "judge", MovePhase(destination=Phase.EVIDENCE))
     assert propose(engine, "def", SubmitEvidence(evidence_id="pros-log")).accepted
@@ -397,3 +401,105 @@ def test_demo_disclosure_phase_rule(phase, expected):
         context, DiscloseEvidence(evidence_id="x", recipient_actor_id="y"))
     assert [f.rule_id for f in findings] == expected
     assert all(f.severity == "procedural" for f in findings)
+
+
+# --- evidence_view: current access, consistent with perspective --------------------------
+
+@pytest.mark.parametrize("mode", ALL_MODES)
+def test_evidence_view_matches_perspective_records(actors, registry, mode):
+    engine = make(actors, registry, mode)
+    disclose(engine, "pros", "pros-log", "def")
+    disclose(engine, "def", "pros-log", "acc")
+    disclose(engine, "acc", "def-file", "judge")  # rejected: AUTH_DISCLOSE
+    disclose(engine, "pros", "sealed", "def")  # rejected: ACL_EVIDENCE
+    for viewer in VIEWERS:
+        view = engine.evidence_view(viewer)
+        projected = engine.perspective(viewer).evidence
+        assert [r.evidence_id for r in view] == [r.evidence_id for r in projected]
+        assert all(r.layer != EpistemicLayer.HIDDEN_TRUTH for r in view)
+        assert "Synthetic sealed fact" not in str([r.model_dump() for r in view])
+        initial = [r.evidence_id for r in engine.initial_evidence_view(viewer)]
+        assert initial == [r.evidence_id for r in registry.visible_to(viewer)]
+    assert "def-file" not in [r.evidence_id for r in engine.evidence_view("judge")]
+
+
+def test_evidence_view_copies_are_detached(actors, registry):
+    engine = make(actors, registry)
+    disclose(engine, "pros", "pros-log", "def")
+    view = engine.evidence_view("def")
+    for record in view:
+        record.summary = "Tampered"
+        record.visible_to_actor_ids.add("wit")
+    assert all(r.summary != "Tampered" for r in engine.evidence_view("def"))
+    assert "pros-log" not in [r.evidence_id for r in engine.evidence_view("wit")]
+
+
+def test_evidence_view_fails_closed_for_unknown_actor(actors, registry):
+    engine = make(actors, registry)
+    for method in (engine.evidence_view, engine.initial_evidence_view):
+        with pytest.raises(PermissionError):
+            method("stranger")
+
+
+# --- failed event preparation leaves no partial state ----------------------------------
+
+def _state(engine):
+    return (
+        engine.events,
+        engine.phase,
+        dict(engine._motions),
+        {actor: dict(ids) for actor, ids in engine._grants.items()},
+        {viewer: engine._access(viewer) for viewer in VIEWERS},
+        {viewer: engine.perspective(viewer) for viewer in VIEWERS},
+        {viewer: engine.evidence_view(viewer) for viewer in VIEWERS},
+    )
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("action", [
+    DiscloseEvidence(evidence_id="pros-log", recipient_actor_id="def"),
+    MovePhase(destination=Phase.EVIDENCE),
+])
+def test_failed_event_construction_changes_nothing(actors, registry, mode, action, monkeypatch):
+    import indubio.core.engine as engine_module
+
+    engine = make(actors, registry, mode)
+    propose(engine, "judge", Speak(text="Synthetic opening"))
+    before = _state(engine)
+
+    def broken_event(**_kwargs):
+        raise RuntimeError("synthetic event construction failure")
+
+    actor_id = "pros" if isinstance(action, DiscloseEvidence) else "judge"
+    with monkeypatch.context() as patch:
+        patch.setattr(engine_module, "TrialEvent", broken_event)
+        with pytest.raises(RuntimeError):
+            propose(engine, actor_id, action)
+    assert _state(engine) == before
+    assert "pros-log" not in engine.perspective("def").accessible_evidence_ids
+    # The engine still works and commits the same proposal normally afterwards.
+    assert propose(engine, actor_id, action).accepted
+    assert engine.events[-1].sequence == 2
+
+
+def test_invalid_mutated_mode_fails_before_any_state_change(actors, registry):
+    engine = make(actors, registry, Mode.REALISTIC)
+    before = _state(engine)
+    engine.config.mode = "not-a-mode"
+    with pytest.raises(ValueError):
+        disclose(engine, "pros", "pros-log", "def")
+    assert _state(engine) == before
+
+
+def test_mode_assigned_as_plain_string_is_coerced(actors, registry):
+    # SimulationConfig does not validate assignment; a valid string must not leave a
+    # grant without a committed event (it used to fail in metadata after the grant).
+    engine = make(actors, registry, Mode.STRICT)
+    engine.config.mode = "realistic"
+    for phase in (Phase.EVIDENCE, Phase.CLOSING):
+        propose(engine, "judge", MovePhase(destination=phase))
+    event = disclose(engine, "pros", "pros-log", "def")
+    assert event.accepted and rules(event) == ["DEMO_DISCLOSURE_PHASE"]
+    assert event.metadata["mode"] == "realistic"
+    assert len(engine.events) == 3
+    assert set(engine.perspective("def").accessible_evidence_ids) == engine._access("def")

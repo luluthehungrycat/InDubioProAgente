@@ -115,10 +115,34 @@ class SimulationEngine:
         return access_at(actor_id, self._evidence_acl, self._grants)
 
     def evidence_view(self, actor_id: str) -> list[EvidenceRecord]:
+        """Detached copies of the records a known actor can *currently* see.
+
+        Same meaning as before disclosure events existed: the records behind the actor's
+        current access, i.e. scenario-initial records plus records received through
+        accepted disclosures, in registry order. Never hidden truth; legacy bare-ID grants
+        carry no record and are not listed. A record received by disclosure is returned
+        with ``visible_to_actor_ids`` cleared, because the scenario's visibility list would
+        reveal who else holds it. ``perspective()`` gives the same record set (as
+        ``ProjectedEvidence``, with ``disclosed_at_sequence``); ``initial_evidence_view()``
+        gives the scenario-initial records only.
+        """
+        if actor_id not in self._actors:
+            raise PermissionError("Unknown actor")
+        initial = self._evidence.accessible_ids(actor_id)
+        received = self._grants.get(actor_id, {})
+        records: list[EvidenceRecord] = []
+        for evidence_id in self._evidence:  # trusted registry order, filtered below
+            if evidence_id in initial:
+                records.append(self._evidence.get(evidence_id))
+            elif evidence_id in received and is_disclosable_record(self._evidence, evidence_id):
+                record = self._evidence.get(evidence_id)
+                records.append(record.model_copy(update={"visible_to_actor_ids": set()}))
+        return records
+
+    def initial_evidence_view(self, actor_id: str) -> list[EvidenceRecord]:
         """Detached copies of the *scenario-initial* records visible to a known actor.
 
-        Never hidden truth. Does not include records received through disclosure events;
-        use ``perspective()`` for an actor's current evidence.
+        Unaffected by disclosure events; never hidden truth.
         """
         if actor_id not in self._actors:
             raise PermissionError("Unknown actor")
@@ -200,9 +224,13 @@ class SimulationEngine:
         ):
             security("REFERENCE_EVENT", "Target event does not exist")
 
+        # ``config`` is a public, mutable model: coerce once so a bad value fails here,
+        # before any state changes, and a valid plain string behaves like the enum.
+        mode = Mode(self.config.mode)
+
         # Procedural checks come from the ruleset, which sees only a frozen snapshot.
         context = RuleContext(
-            mode=self.config.mode,
+            mode=mode,
             phase=self.phase,
             committed_event_count=len(self._events),
             motion_ids=frozenset(self._motions),
@@ -217,34 +245,40 @@ class SimulationEngine:
 
         blocked_by_security = any(f.severity == "security" for f in findings)
         blocked_by_procedure = (
-            self.config.mode == Mode.STRICT and
+            mode == Mode.STRICT and
             any(f.severity == "procedural" for f in findings)
         )
         accepted = not (blocked_by_security or blocked_by_procedure)
         before = self.phase
+        after = action.destination if accepted and isinstance(action, MovePhase) else before
+        sequence = len(self._events) + 1
 
-        if accepted:
-            if isinstance(action, MovePhase):
-                self.phase = action.destination
-            if isinstance(action, FileMotion):
-                self._motions[action.motion_id] = actor.actor_id
-            if isinstance(action, DiscloseEvidence):
-                self._grants.setdefault(action.recipient_actor_id, {}).setdefault(
-                    action.evidence_id, len(self._events) + 1
-                )
-
+        # Build the complete event first. Anything that can fail (validation, metadata)
+        # must fail before state changes, so live access, phase and motions never run
+        # ahead of the committed history that projections are derived from.
         event = TrialEvent(
-            sequence=len(self._events) + 1,
+            sequence=sequence,
             actor_id=actor.actor_id,
             phase_before=before,
-            phase_after=self.phase,
+            phase_after=after,
             proposal=proposal,
             accepted=accepted,
             findings=findings,
-            metadata={"mode": self.config.mode.value,
+            metadata={"mode": mode.value,
                       "ruleset": self._ruleset_metadata.ruleset_id,
                       "ruleset_version": self._ruleset_metadata.version,
                       "ruleset_validation": self._ruleset_metadata.validation_status},
         )
+        result = event.model_copy(deep=True)
+
+        # Commit: plain in-memory assignments only, applied together with the append.
+        if accepted:
+            if isinstance(action, FileMotion):
+                self._motions[action.motion_id] = actor.actor_id
+            if isinstance(action, DiscloseEvidence):
+                self._grants.setdefault(action.recipient_actor_id, {}).setdefault(
+                    action.evidence_id, sequence
+                )
+        self.phase = after
         self._events.append(event)
-        return event.model_copy(deep=True)
+        return result

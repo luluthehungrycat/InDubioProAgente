@@ -63,6 +63,7 @@ Disclosure events (``DiscloseEvidence``, policy in ``indubio.core.disclosure``):
 """
 
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -160,7 +161,7 @@ def _project_event(
     event: TrialEvent,
     viewer: Actor,
     actors: Mapping[str, Actor],
-    viewer_evidence_ids: frozenset[str],
+    viewer_evidence_ids: AbstractSet[str],
 ) -> ProjectedEvent:
     author = actors.get(event.actor_id)
     if author is None or event.proposal.actor_id != event.actor_id:
@@ -241,10 +242,10 @@ def build_projection(
         if event.sequence != expected:
             raise ValueError("Events must be the complete committed history in order")
         expected += 1
-    timeline = derive_grants(events, actors=actors, base_acl=evidence_acl, registry=evidence)
-    viewer_ids = access_at(viewer.actor_id, evidence_acl, timeline[-1])
+    grants = derive_grants(events, actors=actors, base_acl=evidence_acl, registry=evidence)
+    viewer_ids = access_at(viewer.actor_id, evidence_acl, grants)
     scenario_ids = evidence.accessible_ids(viewer.actor_id)
-    received = timeline[-1].get(viewer.actor_id, {})
+    received = grants.get(viewer.actor_id, {})
     records = []
     for evidence_id in evidence:  # trusted registry order; filtered to the viewer below
         if evidence_id in scenario_ids:
@@ -278,10 +279,30 @@ def build_projection(
         ),
         accessible_evidence_ids=tuple(sorted(viewer_ids)),
         evidence=tuple(records),
-        events=tuple(
-            # Event-time access: grants from strictly earlier events only.
-            _project_event(event, viewer, actors,
-                           access_at(viewer.actor_id, evidence_acl, before))
-            for event, before in zip(events, timeline, strict=False)
-        ),
+        events=_project_events(events, viewer, actors, evidence_acl, received),
     )
+
+
+def _project_events(
+    events: Sequence[TrialEvent],
+    viewer: Actor,
+    actors: Mapping[str, Actor],
+    evidence_acl: Mapping[str, frozenset[str]],
+    received: Mapping[str, int],
+) -> tuple[ProjectedEvent, ...]:
+    """Project each event with the viewer's access *as of* that event.
+
+    Event-time access is the scenario grant plus disclosures to the viewer from strictly
+    earlier events. It grows incrementally (linear in events plus the viewer's grants)
+    rather than being rebuilt per event.
+    """
+    access = set(evidence_acl.get(viewer.actor_id, frozenset()))
+    pending = sorted(received.items(), key=lambda item: item[1])
+    next_grant = 0
+    projected = []
+    for event in events:
+        while next_grant < len(pending) and pending[next_grant][1] < event.sequence:
+            access.add(pending[next_grant][0])
+            next_grant += 1
+        projected.append(_project_event(event, viewer, actors, access))
+    return tuple(projected)
