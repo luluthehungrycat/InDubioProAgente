@@ -1,9 +1,14 @@
-"""Deterministic kernel; illustrative, NOT a validated model of German proceedings."""
+"""Deterministic kernel; illustrative, NOT a validated model of German proceedings.
 
-from collections.abc import Iterable
+The engine owns state, security checks and acceptance. Procedural checks are delegated to
+a ``JurisdictionRuleset`` that sees only an immutable snapshot and may return procedural
+findings; it can neither mutate state nor relax actor authority, evidence ACLs or
+structural reference checks.
+"""
+
+from collections.abc import Iterable, Mapping
 
 from indubio.core.models import (
-    PHASES,
     Actor,
     FileMotion,
     Mode,
@@ -15,10 +20,31 @@ from indubio.core.models import (
     RuleFinding,
     RuleOnMotion,
     SimulationConfig,
-    Speak,
     SubmitEvidence,
     TrialEvent,
 )
+from indubio.evidence.models import EvidenceRecord
+from indubio.evidence.registry import EvidenceRegistry
+from indubio.jurisdictions.base import JurisdictionRuleset, RuleContext
+from indubio.jurisdictions.registry import get_ruleset
+
+
+def _snapshot_acl(
+    available_evidence: Mapping[str, Iterable[str]], known_actor_ids: Iterable[str]
+) -> dict[str, frozenset[str]]:
+    known = set(known_actor_ids)
+    acl: dict[str, frozenset[str]] = {}
+    for actor_id, ids in available_evidence.items():
+        if actor_id not in known:
+            raise ValueError(f"Evidence ACL names unknown actor: {actor_id!r}")
+        # A bare string would otherwise be split into single-character evidence IDs.
+        if isinstance(ids, (str, bytes)):
+            raise TypeError("Evidence ACL values must be collections of evidence IDs")
+        snapshot = frozenset(ids)
+        if not all(isinstance(evidence_id, str) and evidence_id for evidence_id in snapshot):
+            raise TypeError("Evidence IDs must be non-empty strings")
+        acl[actor_id] = snapshot
+    return acl
 
 
 class SimulationEngine:
@@ -26,21 +52,57 @@ class SimulationEngine:
         self,
         actors: Iterable[Actor],
         config: SimulationConfig | None = None,
-        available_evidence: dict[str, set[str]] | None = None,
+        available_evidence: Mapping[str, Iterable[str]] | None = None,
+        *,
+        ruleset: JurisdictionRuleset | None = None,
+        evidence: EvidenceRegistry | None = None,
     ) -> None:
         # Snapshot caller-owned models so later mutation cannot change authority.
         actor_list = [actor.model_copy(deep=True) for actor in actors]
         self._actors: dict[str, Actor] = {actor.actor_id: actor for actor in actor_list}
         if len(self._actors) != len(actor_list):
             raise ValueError("Duplicate actor IDs")
-        self.config = config or SimulationConfig()
+        self.config = (config or SimulationConfig()).model_copy(deep=True)
+        if ruleset is None:
+            ruleset = get_ruleset(self.config.jurisdiction)
+        if not isinstance(ruleset, JurisdictionRuleset):
+            raise TypeError("ruleset must implement JurisdictionRuleset")
+        # Metadata is frozen; pin it once so every event carries the same provenance.
+        self._ruleset_metadata = ruleset.metadata.model_copy(deep=True)
+        if self._ruleset_metadata.ruleset_id != self.config.jurisdiction:
+            raise ValueError("Ruleset ID does not match SimulationConfig.jurisdiction")
+        self._ruleset = ruleset
         self.phase = Phase.OPENING
         self._events: list[TrialEvent] = []
         self._motions: dict[str, str] = {}
-        # The engine receives only the per-actor evidence IDs it is permitted to show.
-        self._evidence_acl: dict[str, frozenset[str]] = {
-            actor_id: frozenset(ids) for actor_id, ids in (available_evidence or {}).items()
-        }
+        if available_evidence is not None and evidence is not None:
+            raise ValueError("Pass either an evidence registry or a legacy ACL, not both")
+        if evidence is not None and not isinstance(evidence, EvidenceRegistry):
+            raise TypeError("evidence must be an EvidenceRegistry")
+        # Engine-owned snapshot: views and the ACL below derive from this one stable
+        # record set, never from the caller's instance.
+        self._evidence = evidence.snapshot() if evidence is not None else EvidenceRegistry()
+        if evidence is not None:
+            unknown = self._evidence.actor_ids() - self._actors.keys()
+            if unknown:
+                raise ValueError(f"Evidence registry names unknown actors: {sorted(unknown)}")
+            # Derived from scoped views, so hidden truth is never submittable.
+            self._evidence_acl = {
+                actor_id: self._evidence.accessible_ids(actor_id) for actor_id in self._actors
+            }
+        else:
+            # Legacy pattern: bare per-actor ID grants without records (snapshotted).
+            self._evidence_acl = _snapshot_acl(available_evidence or {}, self._actors)
+
+    @property
+    def ruleset(self) -> JurisdictionRuleset:
+        return self._ruleset
+
+    def evidence_view(self, actor_id: str) -> list[EvidenceRecord]:
+        """Detached copies of the records visible to a known actor; never hidden truth."""
+        if actor_id not in self._actors:
+            raise PermissionError("Unknown actor")
+        return self._evidence.visible_to(actor_id)
 
     @property
     def actors(self) -> dict[str, Actor]:
@@ -66,10 +128,6 @@ class SimulationEngine:
             findings.append(RuleFinding(rule_id=rule_id, description=description,
                                         severity="security"))
 
-        def procedural(rule_id: str, description: str) -> None:
-            findings.append(RuleFinding(rule_id=rule_id, description=description,
-                                        severity="procedural"))
-
         # Never loosen security or actor authority merely by selecting realistic mode.
         if isinstance(action, SubmitEvidence):
             if action.evidence_id not in self._evidence_acl.get(actor.actor_id, frozenset()):
@@ -91,20 +149,20 @@ class SimulationEngine:
         ):
             security("REFERENCE_EVENT", "Target event does not exist")
 
-        # Simplified demonstrator rules. NOT German procedural-law conformance.
-        if isinstance(action, MovePhase):
-            current = PHASES.index(self.phase)
-            target = PHASES.index(action.destination)
-            if target != current + 1:
-                procedural("DEMO_PHASE_ORDER", "Unexpected phase transition")
-        if isinstance(action, RuleOnMotion) and action.motion_id not in self._motions:
-            procedural("DEMO_MOTION_MISSING", "Ruling refers to an unknown motion")
-        if isinstance(action, FileMotion) and action.motion_id in self._motions:
-            procedural("DEMO_MOTION_DUPLICATE", "Motion ID already exists")
-        if isinstance(action, SubmitEvidence) and self.phase != Phase.EVIDENCE:
-            procedural("DEMO_EVIDENCE_PHASE", "Evidence submitted outside demonstrator phase")
-        if isinstance(action, Speak) and self.phase == Phase.FINISHED:
-            procedural("DEMO_AFTER_FINISH", "Speech after close of demonstrator proceeding")
+        # Procedural checks come from the ruleset, which sees only a frozen snapshot.
+        context = RuleContext(
+            mode=self.config.mode,
+            phase=self.phase,
+            committed_event_count=len(self._events),
+            motion_ids=frozenset(self._motions),
+            actor_role=actor.role,
+        )
+        ruleset_findings = self._ruleset.evaluate(context, action.model_copy(deep=True))
+        for finding in ruleset_findings:
+            if not isinstance(finding, RuleFinding) or finding.severity != "procedural":
+                # Rulesets must not create, or claim to waive, security findings.
+                raise TypeError("Rulesets may only return procedural RuleFinding objects")
+            findings.append(finding.model_copy(deep=True))
 
         blocked_by_security = any(f.severity == "security" for f in findings)
         blocked_by_procedure = (
@@ -129,7 +187,9 @@ class SimulationEngine:
             accepted=accepted,
             findings=findings,
             metadata={"mode": self.config.mode.value,
-                      "ruleset": self.config.jurisdiction},
+                      "ruleset": self._ruleset_metadata.ruleset_id,
+                      "ruleset_version": self._ruleset_metadata.version,
+                      "ruleset_validation": self._ruleset_metadata.validation_status},
         )
         self._events.append(event)
         return event.model_copy(deep=True)

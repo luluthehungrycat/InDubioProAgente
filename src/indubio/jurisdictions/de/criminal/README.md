@@ -1,6 +1,6 @@
 # German criminal rule pack — planned
 
-**NOT IMPLEMENTED OR VERIFIED.** Current `core.engine` phase checks are schematic examples, not legal advice or StPO-compliant procedure.
+**NOT IMPLEMENTED OR VERIFIED.** The current demonstrator phase checks (`indubio.jurisdictions.demo`, ruleset `de-criminal-demo-unvalidated`) are schematic examples, not legal advice or StPO-compliant procedure.
 
 A future pack must identify the relevant court/instance, composition (GVG), jurisdiction (StPO/GVG), applicable procedural date, official sources, hearing stages, rights of questioning, evidence handling, judicial deliberation, judgment, legal remedies and exceptions. The *Schöffengericht* must not be modeled as a simple US jury; lay judges participate in German judicial decision-making.
 

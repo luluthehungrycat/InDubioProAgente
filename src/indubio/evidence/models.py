@@ -22,10 +22,11 @@ class EvidenceRecord(BaseModel):
     source_timestamp: str | None = None
 
 
-def visible_records(records: list[EvidenceRecord], actor_id: str) -> list[EvidenceRecord]:
+def is_visible(record: EvidenceRecord, actor_id: str) -> bool:
     # Never expose global hidden truth merely because an actor is a judge.
-    return [
-        record for record in records
-        if record.layer != EpistemicLayer.HIDDEN_TRUTH
-        and actor_id in record.visible_to_actor_ids
-    ]
+    return record.layer != EpistemicLayer.HIDDEN_TRUTH and actor_id in record.visible_to_actor_ids
+
+
+def visible_records(records: list[EvidenceRecord], actor_id: str) -> list[EvidenceRecord]:
+    # Same predicate as EvidenceRegistry; returns detached copies.
+    return [record.model_copy(deep=True) for record in records if is_visible(record, actor_id)]
