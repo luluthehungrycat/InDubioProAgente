@@ -117,6 +117,51 @@ class RuleFinding(BaseModel):
     status: Literal["potential", "confirmed_by_ruleset"] = "potential"
 
 
+PROVENANCE_SCHEMA = "indubio.scenario-provenance/1"
+SETUP_CANONICALIZATION = "indubio.scenario-setup/1"
+SETUP_DIGEST_ALGORITHM = "sha256"
+
+
+class ScenarioIdentity(BaseModel):
+    """Author-declared scenario identity handed to the engine by trusted setup code.
+
+    Identity is a claim, not proof of content; see ``indubio.core.provenance``.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    scenario_schema_version: str = Field(min_length=1)
+    scenario_id: str = Field(min_length=1)
+    scenario_version: str = Field(min_length=1)
+
+
+class ScenarioProvenance(BaseModel):
+    """Scenario identity plus the engine-computed digest of its normalized setup.
+
+    Stamped on every committed event (accepted or rejected) of a scenario-built engine.
+    Trusted audit data: never projected to actors. A consumer matching a journal against
+    a scenario must compare every field exactly. See ``indubio.core.provenance``.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provenance_schema: Literal["indubio.scenario-provenance/1"]
+    scenario_schema_version: str = Field(min_length=1)
+    scenario_id: str = Field(min_length=1)
+    scenario_version: str = Field(min_length=1)
+    setup_canonicalization: Literal["indubio.scenario-setup/1"]
+    setup_digest_algorithm: Literal["sha256"]
+    setup_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @property
+    def identity(self) -> ScenarioIdentity:
+        return ScenarioIdentity(
+            scenario_schema_version=self.scenario_schema_version,
+            scenario_id=self.scenario_id,
+            scenario_version=self.scenario_version,
+        )
+
+
 class TrialEvent(BaseModel):
     sequence: int = Field(ge=1)
     actor_id: str
@@ -127,6 +172,11 @@ class TrialEvent(BaseModel):
     findings: list[RuleFinding] = Field(default_factory=list)
     # A deterministic rule finding is not a judicial legal determination.
     metadata: dict[str, str] = Field(default_factory=dict)
+    # Scenario provenance; ``None`` for direct (non-scenario) engines and legacy journals.
+    # Omitted from serialization when ``None`` so those payloads keep their exact shape.
+    scenario: ScenarioProvenance | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class SimulationConfig(BaseModel):

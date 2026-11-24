@@ -10,6 +10,11 @@ Scope: synthetic fixtures only (``synthetic`` must be ``true``). No real-case im
 legal characterization and no validated procedure. The manifest is plain data: loading
 performs no network access and executes nothing.
 
+Provenance: every event of an engine built here carries ``ScenarioProvenance`` (schema
+version, scenario ID and version, and a deterministic SHA-256 digest of the normalized
+setup the engine runs; see ``indubio.core.provenance``). Provenance is trusted audit data
+and is never projected to actors.
+
 Validation (fails closed with ``pydantic.ValidationError``): unknown fields, unknown
 schema version, duplicate actor or evidence IDs, visibility lists naming unknown actors,
 and ``hidden_truth`` records with any visibility. Sealed truth is evaluator-only by
@@ -23,7 +28,14 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from indubio.core.engine import SimulationEngine
-from indubio.core.models import Actor, Mode, SimulationConfig
+from indubio.core.models import (
+    Actor,
+    Mode,
+    ScenarioIdentity,
+    ScenarioProvenance,
+    SimulationConfig,
+)
+from indubio.core.provenance import scenario_provenance
 from indubio.evidence.models import EpistemicLayer, EvidenceRecord
 from indubio.evidence.registry import EvidenceRegistry
 
@@ -91,6 +103,24 @@ class ScenarioManifest(BaseModel):
     def registry(self) -> EvidenceRegistry:
         return EvidenceRegistry(record.to_record() for record in self.evidence)
 
+    def identity(self) -> ScenarioIdentity:
+        return ScenarioIdentity(
+            scenario_schema_version=self.schema_version,
+            scenario_id=self.scenario_id,
+            scenario_version=self.scenario_version,
+        )
+
+    def provenance(self) -> ScenarioProvenance:
+        """The provenance an engine built from this manifest stamps on its events.
+
+        Trusted audit data (the digest covers sealed content); never hand it to actors.
+        ``title`` and ``disclaimer`` are descriptive and not part of the engine setup, so
+        they do not affect the digest; the identity fields are compared separately.
+        """
+        return scenario_provenance(
+            self.identity(), self.jurisdiction, self.actors, self.registry()
+        )
+
 
 def load_manifest(source: str | Path) -> ScenarioManifest:
     """Parse a manifest from a JSON file path (``Path``) or a JSON string (``str``)."""
@@ -113,4 +143,11 @@ def build_engine(manifest: ScenarioManifest, mode: Mode = Mode.STRICT) -> Simula
     if not isinstance(manifest, ScenarioManifest):
         raise TypeError("build_engine requires a validated ScenarioManifest")
     config = SimulationConfig(jurisdiction=manifest.jurisdiction, mode=mode)
-    return SimulationEngine(manifest.actors, config, evidence=manifest.registry())
+    engine = SimulationEngine(
+        manifest.actors, config, evidence=manifest.registry(), scenario=manifest.identity()
+    )
+    # Defense in depth: the engine digests its own snapshot; it must equal the digest of
+    # the manifest as declared, or the manifest-to-engine conversion lost something.
+    if engine.scenario_provenance != manifest.provenance():  # pragma: no cover - defensive
+        raise RuntimeError("Engine setup does not match the scenario manifest")
+    return engine
