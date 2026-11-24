@@ -79,14 +79,16 @@ class SimulationEngine:
             raise ValueError("Pass either an evidence registry or a legacy ACL, not both")
         if evidence is not None and not isinstance(evidence, EvidenceRegistry):
             raise TypeError("evidence must be an EvidenceRegistry")
-        self._evidence = evidence or EvidenceRegistry()
+        # Engine-owned snapshot: views and the ACL below derive from this one stable
+        # record set, never from the caller's instance.
+        self._evidence = evidence.snapshot() if evidence is not None else EvidenceRegistry()
         if evidence is not None:
-            unknown = evidence.actor_ids() - self._actors.keys()
+            unknown = self._evidence.actor_ids() - self._actors.keys()
             if unknown:
                 raise ValueError(f"Evidence registry names unknown actors: {sorted(unknown)}")
             # Derived from scoped views, so hidden truth is never submittable.
             self._evidence_acl = {
-                actor_id: evidence.accessible_ids(actor_id) for actor_id in self._actors
+                actor_id: self._evidence.accessible_ids(actor_id) for actor_id in self._actors
             }
         else:
             # Legacy pattern: bare per-actor ID grants without records (snapshotted).

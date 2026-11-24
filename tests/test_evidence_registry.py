@@ -203,3 +203,51 @@ def test_legacy_acl_snapshot_ignores_generator_reuse_and_later_edits(actors):
     denied = engine.propose(Proposal(actor_id="p", action=SubmitEvidence(evidence_id="exhibit_a")))
     assert ok.accepted
     assert not denied.accepted and denied.findings[0].rule_id == "ACL_EVIDENCE"
+
+
+# --- Lifecycle: reinitialization and view/ACL coherence ---------------------------------
+
+@pytest.mark.parametrize("mode", [Mode.STRICT, Mode.REALISTIC])
+def test_reinitialization_rejected_and_engine_view_acl_stay_coherent(actors, records, mode):
+    registry = EvidenceRegistry(records)
+    engine = SimulationEngine(actors, SimulationConfig(mode=mode), evidence=registry)
+    replacement = [
+        EvidenceRecord(
+            evidence_id="planted", summary="Synthetic planted record",
+            layer=EpistemicLayer.DISCLOSED, visible_to_actor_ids={"d"},
+        )
+    ]
+    with pytest.raises(AttributeError):
+        registry.__init__(replacement)
+    with pytest.raises(AttributeError):
+        EvidenceRegistry.__init__(registry, [])
+    with pytest.raises(AttributeError):
+        object.__setattr__(registry, "not_a_slot", {})
+    # The caller's instance is unchanged.
+    assert list(registry) == ["truth", "exhibit_a", "note_p"]
+
+    # Even a forced slot overwrite on the caller's instance cannot reach the engine.
+    EvidenceRegistry._records.__set__(registry, {})
+    assert ids(engine.evidence_view("d")) == ["exhibit_a"]
+
+    engine.propose(Proposal(actor_id="j", action=MovePhase(destination=Phase.EVIDENCE)))
+    planted = engine.propose(
+        Proposal(actor_id="d", action=SubmitEvidence(evidence_id="planted"))
+    )
+    assert not planted.accepted
+    assert any(f.rule_id == "ACL_EVIDENCE" for f in planted.findings)
+    submitted = engine.propose(
+        Proposal(actor_id="d", action=SubmitEvidence(evidence_id="exhibit_a"))
+    )
+    assert submitted.accepted
+    # Every ID an actor sees is submittable and vice versa (same snapshot).
+    for actor_id in ACTOR_IDS:
+        assert set(ids(engine.evidence_view(actor_id))) == engine._evidence_acl[actor_id]
+
+
+def test_snapshot_is_independent_deep_copy(records):
+    registry = EvidenceRegistry(records)
+    copy = registry.snapshot()
+    assert copy is not registry and list(copy) == list(registry)
+    copy.visible_to("d")[0].summary = "Tampered"
+    assert registry.visible_to("d")[0].summary == "Synthetic disclosed exhibit"

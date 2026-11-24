@@ -3,6 +3,17 @@
 The registry snapshots records at construction and only ever hands out deep copies.
 Scoped views never include ``HIDDEN_TRUTH`` records, whatever their visibility list says,
 so no actor (including a judge) gains accidental omniscience.
+
+API scope:
+
+* ``visible_to`` and ``accessible_ids`` are the actor-scoped APIs and are what the engine
+  exposes to actors.
+* ``__len__``, ``__iter__`` (registry-wide evidence IDs, including hidden truth),
+  ``actor_ids`` and ``snapshot`` are trusted setup/validation APIs for scenario authors
+  and the engine. They are not actor views and must never be handed to an actor.
+
+Construction happens exactly once: calling ``__init__`` again on an existing instance
+raises instead of replacing the backing mapping.
 """
 
 from collections.abc import Iterable, Iterator
@@ -16,6 +27,12 @@ class EvidenceRegistry:
     __slots__ = ("_records",)
 
     def __init__(self, records: Iterable[EvidenceRecord] = ()) -> None:
+        try:
+            EvidenceRegistry._records.__get__(self)
+        except AttributeError:
+            pass
+        else:
+            raise AttributeError("EvidenceRegistry is immutable and cannot be reinitialized")
         snapshot: dict[str, EvidenceRecord] = {}
         for record in records:
             if not isinstance(record, EvidenceRecord):
@@ -35,7 +52,16 @@ class EvidenceRegistry:
         return len(self._records)
 
     def __iter__(self) -> Iterator[str]:
+        """Trusted setup API: all evidence IDs, including hidden truth. Not an actor view."""
         return iter(self._records)
+
+    def snapshot(self) -> "EvidenceRegistry":
+        """Trusted setup API: an independent registry built from deep copies.
+
+        The engine keeps its own snapshot so both evidence views and the derived ACL come
+        from one stable record set that no caller holds a reference to.
+        """
+        return EvidenceRegistry(self._records.values())
 
     def visible_to(self, actor_id: str) -> list[EvidenceRecord]:
         """Detached copies of the records this actor may see, in registration order."""
@@ -52,6 +78,7 @@ class EvidenceRegistry:
         )
 
     def actor_ids(self) -> frozenset[str]:
+        """Trusted setup API: every actor named in any visibility list (for validation)."""
         return frozenset(
             actor_id for record in self._records.values()
             for actor_id in record.visible_to_actor_ids
