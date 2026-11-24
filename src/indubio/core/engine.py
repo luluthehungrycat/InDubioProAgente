@@ -23,6 +23,7 @@ from indubio.core.models import (
     SubmitEvidence,
     TrialEvent,
 )
+from indubio.core.projection import PerspectiveProjection, build_projection
 from indubio.evidence.models import EvidenceRecord
 from indubio.evidence.registry import EvidenceRegistry
 from indubio.jurisdictions.base import JurisdictionRuleset, RuleContext
@@ -103,6 +104,22 @@ class SimulationEngine:
         if actor_id not in self._actors:
             raise PermissionError("Unknown actor")
         return self._evidence.visible_to(actor_id)
+
+    def perspective(self, actor_id: str) -> PerspectiveProjection:
+        """Deterministic, redacted view of the committed history for one known actor.
+
+        Fails closed for unknown actors. See ``indubio.core.projection`` for the policy;
+        ``events`` remains the trusted, unredacted audit history.
+        """
+        return build_projection(
+            actor_id,
+            actors=self._actors,
+            events=self._events,
+            evidence_acl=self._evidence_acl,
+            evidence=self._evidence,
+            phase=self.phase,
+            ruleset=self._ruleset_metadata,
+        )
 
     @property
     def actors(self) -> dict[str, Actor]:

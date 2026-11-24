@@ -13,6 +13,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="InDubioProAgente experimental kernel")
     parser.add_argument("command", choices=["demo"])
     parser.add_argument("--mode", choices=[mode.value for mode in Mode], default="realistic")
+    parser.add_argument(
+        "--perspective", metavar="ACTOR_ID",
+        help="also print the redacted projection for one synthetic actor",
+    )
     args = parser.parse_args()
     actors = [
         Actor(actor_id="judge", role=Role.JUDGE, display_name="Judge"),
@@ -31,6 +35,11 @@ def main() -> None:
     ]
     for action in actions:
         print(engine.propose(action).model_dump_json())
+    if args.perspective is not None:
+        try:
+            print(engine.perspective(args.perspective).model_dump_json())
+        except PermissionError as error:
+            parser.exit(2, f"error: {error}\n")
 
 
 if __name__ == "__main__":

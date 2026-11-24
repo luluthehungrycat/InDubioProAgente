@@ -15,4 +15,6 @@ Model prompts, testimony, transcripts, documents, citations, tool descriptions, 
 - Never allow an 'unsafe realism' flag to override these requirements.
 
 ## Current limitations
+Per-actor perspective projections (`SimulationEngine.perspective`) are a structural, in-process redaction layer over trusted engine state. They do not authenticate the caller (any code holding the engine can request any known actor's view or the full `events` audit history), do not scan free text, and are not an isolation boundary between processes. Free text in accepted public events is untrusted data.
+
 This repository is an architectural starter, **not a security-hardened multi-user service**. SQLite and basic ACL tests do not provide isolation across processes or authenticated users. Do not connect it to public networks or production legal files. Security review, sandboxing and real identity management are prerequisites for external adapters.
