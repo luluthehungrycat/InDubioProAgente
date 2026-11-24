@@ -28,18 +28,28 @@ class SimulationEngine:
         config: SimulationConfig | None = None,
         available_evidence: dict[str, set[str]] | None = None,
     ) -> None:
-        actor_list = list(actors)
+        # Snapshot caller-owned models so later mutation cannot change authority.
+        actor_list = [actor.model_copy(deep=True) for actor in actors]
         self.actors = {actor.actor_id: actor for actor in actor_list}
         if len(self.actors) != len(actor_list):
             raise ValueError("Duplicate actor IDs")
         self.config = config or SimulationConfig()
         self.phase = Phase.OPENING
-        self.events: list[TrialEvent] = []
+        self._events: list[TrialEvent] = []
         self._motions: dict[str, str] = {}
         # The engine receives only the per-actor evidence IDs it is permitted to show.
-        self._evidence_acl = available_evidence or {}
+        self._evidence_acl: dict[str, frozenset[str]] = {
+            actor_id: frozenset(ids) for actor_id, ids in (available_evidence or {}).items()
+        }
+
+    @property
+    def events(self) -> list[TrialEvent]:
+        """Copies of the committed history; editing them cannot rewrite the record."""
+        return [event.model_copy(deep=True) for event in self._events]
 
     def propose(self, proposal: Proposal) -> TrialEvent:
+        # Validate and record a private snapshot, never the caller's mutable object.
+        proposal = proposal.model_copy(deep=True)
         actor = self.actors.get(proposal.actor_id)
         if actor is None:
             raise PermissionError("Unknown actor: no event was committed")
@@ -57,7 +67,7 @@ class SimulationEngine:
 
         # Never loosen security or actor authority merely by selecting realistic mode.
         if isinstance(action, SubmitEvidence):
-            if action.evidence_id not in self._evidence_acl.get(actor.actor_id, set()):
+            if action.evidence_id not in self._evidence_acl.get(actor.actor_id, frozenset()):
                 security("ACL_EVIDENCE", "Actor cannot access or introduce this evidence ID")
         if isinstance(action, RuleOnMotion) and actor.role != Role.JUDGE:
             security("AUTH_RULING", "Only a judge can issue rulings")
@@ -71,7 +81,9 @@ class SimulationEngine:
             Role.DEFENSE, Role.PROSECUTOR, Role.DEFENDANT
         }:
             security("AUTH_OBJECTION", "Role cannot lodge objections in starter model")
-        if isinstance(action, Object) and not (1 <= action.target_event_sequence <= len(self.events)):
+        if isinstance(action, Object) and not (
+            1 <= action.target_event_sequence <= len(self._events)
+        ):
             security("REFERENCE_EVENT", "Target event does not exist")
 
         # Simplified demonstrator rules. NOT German procedural-law conformance.
@@ -104,7 +116,7 @@ class SimulationEngine:
                 self._motions[action.motion_id] = actor.actor_id
 
         event = TrialEvent(
-            sequence=len(self.events) + 1,
+            sequence=len(self._events) + 1,
             actor_id=actor.actor_id,
             phase_before=before,
             phase_after=self.phase,
@@ -114,5 +126,5 @@ class SimulationEngine:
             metadata={"mode": self.config.mode.value,
                       "ruleset": self.config.jurisdiction},
         )
-        self.events.append(event)
-        return event
+        self._events.append(event)
+        return event.model_copy(deep=True)

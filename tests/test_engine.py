@@ -2,8 +2,8 @@ import pytest
 
 from indubio.core.engine import SimulationEngine
 from indubio.core.models import (
-    Actor, FileMotion, Mode, MovePhase, Phase, Proposal, Role, RuleOnMotion,
-    SimulationConfig, SubmitEvidence,
+    Actor, FileMotion, Mode, MovePhase, Phase, Proposal, Role, RuleFinding,
+    RuleOnMotion, SimulationConfig, SubmitEvidence,
 )
 
 
@@ -69,3 +69,50 @@ def test_unknown_actor_never_commits(actors):
     with pytest.raises(PermissionError):
         engine.propose(Proposal(actor_id="intruder", action=MovePhase(destination=Phase.FINISHED)))
     assert engine.events == []
+
+
+def test_caller_mutation_cannot_rewrite_committed_history(actors):
+    engine = SimulationEngine(actors)
+    proposal = Proposal(actor_id="d", action=FileMotion(motion_id="m1", grounds="Objection"))
+    returned = engine.propose(proposal)
+    assert returned.proposal is not proposal
+
+    proposal.action.motion_id = "edited"
+    returned.accepted = False
+    returned.proposal.action.motion_id = "edited-via-return"
+    engine.events[0].findings.append(
+        RuleFinding(rule_id="FAKE", description="Injected", severity="procedural")
+    )
+
+    recorded = engine.events[0]
+    assert recorded.accepted
+    assert recorded.proposal.action.motion_id == "m1"
+    assert recorded.findings == []
+    ruling = engine.propose(Proposal(
+        actor_id="j", action=RuleOnMotion(motion_id="m1", ruling="denied", reasons="Denied")
+    ))
+    assert ruling.accepted
+
+
+def test_events_list_cannot_be_appended_or_cleared(actors):
+    engine = SimulationEngine(actors)
+    engine.propose(Proposal(actor_id="j", action=MovePhase(destination=Phase.EVIDENCE)))
+    engine.events.clear()
+    assert [event.sequence for event in engine.events] == [1]
+
+
+def test_actor_and_acl_snapshots_prevent_later_escalation(actors):
+    acl = {"d": {"exhibit"}}
+    engine = SimulationEngine(actors, available_evidence=acl)
+    actors[2].role = Role.JUDGE
+    acl["w"] = {"exhibit"}
+    acl["d"].add("secret")
+
+    phase = engine.propose(Proposal(actor_id="w", action=MovePhase(destination=Phase.EVIDENCE)))
+    assert not phase.accepted and phase.findings[0].rule_id == "AUTH_PHASE"
+    for actor_id, evidence_id in (("w", "exhibit"), ("d", "secret")):
+        event = engine.propose(
+            Proposal(actor_id=actor_id, action=SubmitEvidence(evidence_id=evidence_id))
+        )
+        assert not event.accepted
+        assert event.findings[0].rule_id == "ACL_EVIDENCE"
