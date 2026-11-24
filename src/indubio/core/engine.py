@@ -8,8 +8,16 @@ structural reference checks.
 
 from collections.abc import Iterable, Mapping
 
+from indubio.core.disclosure import (
+    DISCLOSER_ROLES,
+    RECIPIENT_ROLES,
+    Grants,
+    access_at,
+    is_disclosable_record,
+)
 from indubio.core.models import (
     Actor,
+    DiscloseEvidence,
     FileMotion,
     Mode,
     MovePhase,
@@ -76,6 +84,9 @@ class SimulationEngine:
         self.phase = Phase.OPENING
         self._events: list[TrialEvent] = []
         self._motions: dict[str, str] = {}
+        # Access granted by accepted disclosure events; ``_evidence_acl`` stays the
+        # scenario-initial grant set. Both are engine-owned and never handed out.
+        self._grants: Grants = {}
         if available_evidence is not None and evidence is not None:
             raise ValueError("Pass either an evidence registry or a legacy ACL, not both")
         if evidence is not None and not isinstance(evidence, EvidenceRegistry):
@@ -99,8 +110,16 @@ class SimulationEngine:
     def ruleset(self) -> JurisdictionRuleset:
         return self._ruleset
 
+    def _access(self, actor_id: str) -> frozenset[str]:
+        """Current access: scenario grants plus accepted disclosures so far."""
+        return access_at(actor_id, self._evidence_acl, self._grants)
+
     def evidence_view(self, actor_id: str) -> list[EvidenceRecord]:
-        """Detached copies of the records visible to a known actor; never hidden truth."""
+        """Detached copies of the *scenario-initial* records visible to a known actor.
+
+        Never hidden truth. Does not include records received through disclosure events;
+        use ``perspective()`` for an actor's current evidence.
+        """
         if actor_id not in self._actors:
             raise PermissionError("Unknown actor")
         return self._evidence.visible_to(actor_id)
@@ -147,8 +166,23 @@ class SimulationEngine:
 
         # Never loosen security or actor authority merely by selecting realistic mode.
         if isinstance(action, SubmitEvidence):
-            if action.evidence_id not in self._evidence_acl.get(actor.actor_id, frozenset()):
+            if action.evidence_id not in self._access(actor.actor_id):
                 security("ACL_EVIDENCE", "Actor cannot access or introduce this evidence ID")
+        if isinstance(action, DiscloseEvidence):
+            if actor.role not in DISCLOSER_ROLES:
+                security("AUTH_DISCLOSE", "Role cannot disclose evidence in this starter model")
+            recipient = self._actors.get(action.recipient_actor_id)
+            if recipient is None or recipient.actor_id == actor.actor_id:
+                security("REFERENCE_ACTOR", "Recipient must be another known actor")
+            elif recipient.role not in RECIPIENT_ROLES:
+                security("AUTH_DISCLOSE_RECIPIENT",
+                         "Recipient role cannot receive disclosures in this starter model")
+            if action.evidence_id not in self._access(actor.actor_id):
+                # Same finding for unknown, sealed and inaccessible IDs: no oracle.
+                security("ACL_EVIDENCE", "Actor cannot access or disclose this evidence ID")
+            elif not is_disclosable_record(self._evidence, action.evidence_id):
+                security("DISCLOSE_RECORD_REQUIRED",
+                         "Only registry-backed evidence records can be disclosed")
         if isinstance(action, RuleOnMotion) and actor.role != Role.JUDGE:
             security("AUTH_RULING", "Only a judge can issue rulings")
         if isinstance(action, MovePhase) and actor.role != Role.JUDGE:
@@ -194,6 +228,10 @@ class SimulationEngine:
                 self.phase = action.destination
             if isinstance(action, FileMotion):
                 self._motions[action.motion_id] = actor.actor_id
+            if isinstance(action, DiscloseEvidence):
+                self._grants.setdefault(action.recipient_actor_id, {}).setdefault(
+                    action.evidence_id, len(self._events) + 1
+                )
 
         event = TrialEvent(
             sequence=len(self._events) + 1,

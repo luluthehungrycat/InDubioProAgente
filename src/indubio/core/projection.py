@@ -45,6 +45,21 @@ hidden truth.
 
 Projected evidence records omit ``visible_to_actor_ids`` so a viewer does not learn who
 else holds a record.
+
+Disclosure events (``DiscloseEvidence``, policy in ``indubio.core.disclosure``):
+
+* Discloser: ``OWN`` as for any event. Recipient of an **accepted** disclosure:
+  ``RECIPIENT`` with author, role and full action. Everyone else, and the named recipient
+  of a *rejected* disclosure: ``WITHHELD``. Disclosure is a private act between two
+  actors, not a public courtroom act.
+* Grants are derived from accepted disclosures in the trusted history and revalidated;
+  a history the engine could not have produced raises ``ValueError``.
+* **Event-time versus current visibility.** ``accessible_evidence_ids`` and ``evidence``
+  reflect *current* access (scenario grants plus all accepted disclosures). Redaction of
+  an individual event uses the viewer's access *as of that event* (grants from strictly
+  earlier events). A later disclosure therefore never retroactively un-redacts an earlier
+  ``SubmitEvidence`` event: receiving a record is not learning which act, earlier, used
+  it. Records received by disclosure carry ``disclosed_at_sequence``.
 """
 
 from collections.abc import Mapping, Sequence
@@ -52,9 +67,11 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from indubio.core.disclosure import access_at, derive_grants, is_disclosable_record
 from indubio.core.models import (
     Action,
     Actor,
+    DiscloseEvidence,
     FileMotion,
     MovePhase,
     Object,
@@ -75,6 +92,7 @@ class EventVisibility(StrEnum):
     OWN = "own"
     PUBLIC = "public"
     PUBLIC_REDACTED = "public_redacted"
+    RECIPIENT = "recipient"
     WITHHELD = "withheld"
 
 
@@ -96,6 +114,9 @@ class ProjectedEvidence(BaseModel):
     layer: EpistemicLayer
     provenance: str | None = None
     source_timestamp: str | None = None
+    # Set only for records the viewer holds because of a disclosure event, not a
+    # scenario grant: the sequence of the first accepted disclosure to the viewer.
+    disclosed_at_sequence: int | None = Field(default=None, ge=1)
 
 
 class ProjectedEvent(BaseModel):
@@ -165,6 +186,21 @@ def _project_event(
             ),
         )
 
+    if (
+        isinstance(action, DiscloseEvidence)
+        and event.accepted
+        and action.recipient_actor_id == viewer.actor_id
+    ):
+        return ProjectedEvent(
+            **base,
+            visibility=EventVisibility.RECIPIENT,
+            actor_id=author.actor_id,
+            actor_role=author.role,
+            accepted=True,
+            action_kind=action.kind,
+            action=action.model_copy(deep=True),
+        )
+
     if not event.accepted or not isinstance(action, _PUBLIC_KINDS):
         return ProjectedEvent(**base, visibility=EventVisibility.WITHHELD)
 
@@ -205,17 +241,27 @@ def build_projection(
         if event.sequence != expected:
             raise ValueError("Events must be the complete committed history in order")
         expected += 1
-    viewer_ids = frozenset(evidence_acl.get(viewer.actor_id, frozenset()))
-    records = tuple(
-        ProjectedEvidence(
+    timeline = derive_grants(events, actors=actors, base_acl=evidence_acl, registry=evidence)
+    viewer_ids = access_at(viewer.actor_id, evidence_acl, timeline[-1])
+    scenario_ids = evidence.accessible_ids(viewer.actor_id)
+    received = timeline[-1].get(viewer.actor_id, {})
+    records = []
+    for evidence_id in evidence:  # trusted registry order; filtered to the viewer below
+        if evidence_id in scenario_ids:
+            disclosed_at = None
+        elif evidence_id in received and is_disclosable_record(evidence, evidence_id):
+            disclosed_at = received[evidence_id]
+        else:
+            continue
+        record = evidence.get(evidence_id)
+        records.append(ProjectedEvidence(
             evidence_id=record.evidence_id,
             summary=record.summary,
             layer=record.layer,
             provenance=record.provenance,
             source_timestamp=record.source_timestamp,
-        )
-        for record in evidence.visible_to(viewer.actor_id)
-    )
+            disclosed_at_sequence=disclosed_at,
+        ))
     return PerspectiveProjection(
         viewer_actor_id=viewer.actor_id,
         viewer_role=viewer.role,
@@ -231,6 +277,11 @@ def build_projection(
             for actor in sorted(actors.values(), key=lambda actor: actor.actor_id)
         ),
         accessible_evidence_ids=tuple(sorted(viewer_ids)),
-        evidence=records,
-        events=tuple(_project_event(event, viewer, actors, viewer_ids) for event in events),
+        evidence=tuple(records),
+        events=tuple(
+            # Event-time access: grants from strictly earlier events only.
+            _project_event(event, viewer, actors,
+                           access_at(viewer.actor_id, evidence_acl, before))
+            for event, before in zip(events, timeline, strict=False)
+        ),
     )

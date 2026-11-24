@@ -9,7 +9,7 @@ API scope:
 * ``visible_to`` and ``accessible_ids`` are the actor-scoped APIs and are what the engine
   exposes to actors.
 * ``__len__``, ``__iter__`` (registry-wide evidence IDs, including hidden truth),
-  ``actor_ids`` and ``snapshot`` are trusted setup/validation APIs for scenario authors
+  ``get``, ``actor_ids`` and ``snapshot`` are trusted setup/validation APIs for scenario authors
   and the engine. They are not actor views and must never be handed to an actor.
 
 Construction happens exactly once: calling ``__init__`` again on an existing instance
@@ -62,6 +62,11 @@ class EvidenceRegistry:
         from one stable record set that no caller holds a reference to.
         """
         return EvidenceRegistry(self._records.values())
+
+    def get(self, evidence_id: str) -> EvidenceRecord | None:
+        """Trusted setup API: a detached copy of any record, including hidden truth."""
+        record = self._records.get(evidence_id)
+        return None if record is None else record.model_copy(deep=True)
 
     def visible_to(self, actor_id: str) -> list[EvidenceRecord]:
         """Detached copies of the records this actor may see, in registration order."""
