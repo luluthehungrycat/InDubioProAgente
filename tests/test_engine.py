@@ -101,6 +101,27 @@ def test_events_list_cannot_be_appended_or_cleared(actors):
     assert [event.sequence for event in engine.events] == [1]
 
 
+def test_actor_registry_copies_cannot_escalate_authority(actors):
+    engine = SimulationEngine(actors)
+
+    # Mutate every detached copy the read interface hands out.
+    for actor in engine.actors.values():
+        actor.role = Role.JUDGE
+    engine.actors["w"].actor_id = "j"
+    engine.actors["d"].display_name = "Tampered"
+    engine.actors.clear()
+    engine.actors["w"] = Actor(actor_id="w", role=Role.JUDGE, display_name="Fake")
+
+    # Authority is unchanged: the witness still cannot change phase, and the
+    # defense's display name was never rewritten.
+    phase = engine.propose(Proposal(actor_id="w", action=MovePhase(destination=Phase.EVIDENCE)))
+    assert not phase.accepted and phase.findings[0].rule_id == "AUTH_PHASE"
+    assert engine.actors["w"].role == Role.WITNESS
+    assert engine.actors["j"].role == Role.JUDGE
+    assert engine.actors["d"].display_name == "Defense"
+    assert set(engine.actors) == {"j", "d", "w"}
+
+
 def test_actor_and_acl_snapshots_prevent_later_escalation(actors):
     acl = {"d": {"exhibit"}}
     engine = SimulationEngine(actors, available_evidence=acl)

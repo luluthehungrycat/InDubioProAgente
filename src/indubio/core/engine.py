@@ -30,8 +30,8 @@ class SimulationEngine:
     ) -> None:
         # Snapshot caller-owned models so later mutation cannot change authority.
         actor_list = [actor.model_copy(deep=True) for actor in actors]
-        self.actors = {actor.actor_id: actor for actor in actor_list}
-        if len(self.actors) != len(actor_list):
+        self._actors: dict[str, Actor] = {actor.actor_id: actor for actor in actor_list}
+        if len(self._actors) != len(actor_list):
             raise ValueError("Duplicate actor IDs")
         self.config = config or SimulationConfig()
         self.phase = Phase.OPENING
@@ -43,6 +43,11 @@ class SimulationEngine:
         }
 
     @property
+    def actors(self) -> dict[str, Actor]:
+        """Detached copies of the actor registry; editing them cannot change authority."""
+        return {actor_id: actor.model_copy(deep=True) for actor_id, actor in self._actors.items()}
+
+    @property
     def events(self) -> list[TrialEvent]:
         """Copies of the committed history; editing them cannot rewrite the record."""
         return [event.model_copy(deep=True) for event in self._events]
@@ -50,7 +55,7 @@ class SimulationEngine:
     def propose(self, proposal: Proposal) -> TrialEvent:
         # Validate and record a private snapshot, never the caller's mutable object.
         proposal = proposal.model_copy(deep=True)
-        actor = self.actors.get(proposal.actor_id)
+        actor = self._actors.get(proposal.actor_id)
         if actor is None:
             raise PermissionError("Unknown actor: no event was committed")
 
