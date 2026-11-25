@@ -11,18 +11,19 @@ from indubio.core.models import (
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="InDubioProAgente experimental kernel")
-    parser.add_argument("command", choices=["demo", "scenario-demo"])
+    parser.add_argument("command", choices=["demo", "scenario-demo", "floor-demo"])
     parser.add_argument("--mode", choices=[mode.value for mode in Mode], default="realistic")
     parser.add_argument(
         "--perspective", metavar="ACTOR_ID",
         help="also print the redacted projection for one synthetic actor",
     )
     args = parser.parse_args()
-    if args.command == "scenario-demo":
+    if args.command in {"scenario-demo", "floor-demo"}:
         # Imported lazily so the default demo path is unchanged.
-        from indubio.scenarios.demo import run_scenario_demo
+        from indubio.scenarios.demo import run_floor_demo, run_scenario_demo
 
-        engine = run_scenario_demo(Mode(args.mode))
+        run = run_scenario_demo if args.command == "scenario-demo" else run_floor_demo
+        engine = run(Mode(args.mode))
         for event in engine.events:
             print(event.model_dump_json())
         _print_perspective(parser, engine, args.perspective)

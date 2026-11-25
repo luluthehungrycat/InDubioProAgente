@@ -30,6 +30,7 @@ from indubio.core.models import (
     ACTION_TYPES,
     Action,
     Actor,
+    AdvanceFloor,
     DiscloseEvidence,
     FileMotion,
     Mode,
@@ -37,12 +38,15 @@ from indubio.core.models import (
     Object,
     Phase,
     Proposal,
+    ReleaseFloor,
+    RequestFloor,
     Role,
     RuleOnMotion,
     SimulationConfig,
     Speak,
     SubmitEvidence,
     TrialEvent,
+    WithdrawFloorRequest,
 )
 from indubio.evidence.models import EpistemicLayer, EvidenceRecord
 from indubio.evidence.registry import EvidenceRegistry
@@ -62,6 +66,16 @@ EXPECTED = {
     "object": ({P, D, A}, "AUTH_OBJECTION"),
     "disclose_evidence": ({J, P, D}, "AUTH_DISCLOSE"),
 }
+# Opt-in floor control; the engine role matrix for these lives in tests/test_floor.py,
+# because a permitted floor action also needs floor control and a matching floor state.
+FLOOR_EXPECTED = {
+    "request_floor": ({P, D, A, W}, "AUTH_FLOOR_REQUEST"),
+    "withdraw_floor_request": ({P, D, A, W}, "AUTH_FLOOR_WITHDRAW"),
+    "release_floor": ({P, D, A, W}, "AUTH_FLOOR_RELEASE"),
+    "advance_floor": ({J}, "AUTH_FLOOR_ADVANCE"),
+}
+CORE_EXPECTED = EXPECTED
+EXPECTED = {**CORE_EXPECTED, **FLOOR_EXPECTED}
 
 ACTOR_FOR_ROLE = {J: "judge", P: "pros", D: "def", A: "acc", W: "wit", O: "obs"}
 
@@ -76,10 +90,15 @@ def sample_action(kind, actor_id):
         "file_motion": FileMotion(motion_id="m-new", grounds="g"),
         "object": Object(target_event_sequence=1, grounds="g"),
         "disclose_evidence": DiscloseEvidence(evidence_id="ex", recipient_actor_id=recipient),
+        "request_floor": RequestFloor(),
+        "withdraw_floor_request": WithdrawFloorRequest(),
+        "release_floor": ReleaseFloor(),
+        "advance_floor": AdvanceFloor(),
     }[kind]
 
 
-CASES = [(kind, role) for kind in EXPECTED for role in Role]
+CASES = [(kind, role) for kind in CORE_EXPECTED for role in Role]
+ALL_CASES = [(kind, role) for kind in EXPECTED for role in Role]
 
 
 class PermissiveRuleset:
@@ -154,7 +173,7 @@ def test_disclosure_constants_alias_the_authoritative_table():
     assert RECIPIENT_ROLES == DISCLOSURE_RECIPIENT_ROLES == {J, P, D, A}
 
 
-@pytest.mark.parametrize("kind,role", CASES)
+@pytest.mark.parametrize("kind,role", ALL_CASES)
 def test_pure_lookup(kind, role):
     allowed, rule_id = EXPECTED[kind]
     action = sample_action(kind, ACTOR_FOR_ROLE[role])

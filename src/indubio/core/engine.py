@@ -10,7 +10,15 @@ Out-of-schema proposals are refused with an exception before any of this runs (s
 
 Security checks run in a fixed order: role authorization from the authoritative,
 fail-closed table in ``indubio.core.authorization`` first, then structural reference and
-evidence-ACL checks, then the ruleset's procedural findings.
+evidence-ACL checks, then the structural floor checks (``indubio.core.floor``), then the
+jurisdiction ruleset's procedural findings, then (only with floor control) the floor
+ruleset's procedural findings.
+
+Floor control is opt-in and fixed at construction (``floor_rules``); it is not part of
+the public, mutable ``config``. Without it, events and behavior are exactly as before.
+With it, every event additionally records ``floor_semantics``, ``floor_rules``,
+``floor_rules_version`` and ``floor_rules_validation`` in ``metadata`` so the run
+parameter is bound for replay.
 """
 
 from collections.abc import Iterable, Mapping
@@ -22,6 +30,9 @@ from indubio.core.disclosure import (
     has_access,
     is_disclosable_record,
 )
+from indubio.core.floor import FLOOR_SEMANTICS, FloorState
+from indubio.core.floor import structural_findings as floor_findings
+from indubio.core.floor import transition as floor_transition
 from indubio.core.models import (
     ACTION_TYPES,
     Actor,
@@ -43,7 +54,7 @@ from indubio.core.projection import PerspectiveProjection, build_projection
 from indubio.core.provenance import scenario_provenance
 from indubio.evidence.models import EvidenceRecord
 from indubio.evidence.registry import EvidenceRegistry
-from indubio.jurisdictions.base import JurisdictionRuleset, RuleContext
+from indubio.jurisdictions.base import JurisdictionRuleset, RuleContext, RulesetMetadata
 from indubio.jurisdictions.registry import get_ruleset
 
 
@@ -113,6 +124,7 @@ class SimulationEngine:
         ruleset: JurisdictionRuleset | None = None,
         evidence: EvidenceRegistry | None = None,
         scenario: ScenarioIdentity | None = None,
+        floor_rules: JurisdictionRuleset | None = None,
     ) -> None:
         # Snapshot caller-owned models so later mutation cannot change authority.
         actor_list = [actor.model_copy(deep=True) for actor in actors]
@@ -129,6 +141,18 @@ class SimulationEngine:
         if self._ruleset_metadata.ruleset_id != self.config.jurisdiction:
             raise ValueError("Ruleset ID does not match SimulationConfig.jurisdiction")
         self._ruleset = ruleset
+        # Opt-in floor control: ``None`` means no queue and no floor (pre-floor behavior).
+        self._floor_rules: JurisdictionRuleset | None = None
+        self._floor_metadata: RulesetMetadata | None = None
+        self._floor: FloorState | None = None
+        if floor_rules is not None:
+            if not isinstance(floor_rules, JurisdictionRuleset):
+                raise TypeError("floor_rules must implement JurisdictionRuleset")
+            self._floor_metadata = floor_rules.metadata.model_copy(deep=True)
+            if self._floor_metadata.ruleset_id == self._ruleset_metadata.ruleset_id:
+                raise ValueError("floor_rules must be a floor pack, not the jurisdiction")
+            self._floor_rules = floor_rules
+            self._floor = FloorState()
         self.phase = Phase.OPENING
         self._events: list[TrialEvent] = []
         self._motions: dict[str, str] = {}
@@ -177,6 +201,19 @@ class SimulationEngine:
     @property
     def ruleset(self) -> JurisdictionRuleset:
         return self._ruleset
+
+    @property
+    def floor_rules(self) -> JurisdictionRuleset | None:
+        return self._floor_rules
+
+    @property
+    def floor(self) -> FloorState | None:
+        """Current (immutable) floor state, or ``None`` without floor control.
+
+        Derived only from accepted floor and phase events, which are public acts, so it
+        holds no private information; ``perspective()`` exposes the same state.
+        """
+        return self._floor
 
     def _access(self, actor_id: str) -> frozenset[str]:
         """Current access: scenario grants plus accepted disclosures so far."""
@@ -233,6 +270,7 @@ class SimulationEngine:
             evidence=self._evidence,
             phase=self.phase,
             ruleset=self._ruleset_metadata,
+            floor_enabled=self._floor is not None,
         )
 
     @property
@@ -285,6 +323,8 @@ class SimulationEngine:
             1 <= action.target_event_sequence <= len(self._events)
         ):
             security("REFERENCE_EVENT", "Target event does not exist")
+        # 3. Structural floor checks (``FLOOR_DISABLED`` without floor control).
+        findings.extend(floor_findings(self._floor, actor.actor_id, action))
 
         # ``config`` is a public, mutable model: coerce once so a bad value fails here,
         # before any state changes, and a valid plain string behaves like the enum.
@@ -297,8 +337,14 @@ class SimulationEngine:
             committed_event_count=len(self._events),
             motion_ids=frozenset(self._motions),
             actor_role=actor.role,
+            floor_enabled=self._floor is not None,
+            actor_holds_floor=self._floor is not None and self._floor.holder == actor.actor_id,
         )
-        ruleset_findings = self._ruleset.evaluate(context, action.model_copy(deep=True))
+        ruleset_findings = list(self._ruleset.evaluate(context, action.model_copy(deep=True)))
+        if self._floor_rules is not None:
+            ruleset_findings.extend(
+                self._floor_rules.evaluate(context, action.model_copy(deep=True))
+            )
         for finding in ruleset_findings:
             if not isinstance(finding, RuleFinding) or finding.severity != "procedural":
                 # Rulesets must not create, or claim to waive, security findings.
@@ -314,6 +360,20 @@ class SimulationEngine:
         before = self.phase
         after = action.destination if accepted and isinstance(action, MovePhase) else before
         sequence = len(self._events) + 1
+        floor_after = self._floor
+        if accepted and self._floor is not None:
+            floor_after = floor_transition(
+                self._floor, actor.actor_id, action, phase_changed=after != before
+            )
+        metadata = {"mode": mode.value,
+                    "ruleset": self._ruleset_metadata.ruleset_id,
+                    "ruleset_version": self._ruleset_metadata.version,
+                    "ruleset_validation": self._ruleset_metadata.validation_status}
+        if self._floor_metadata is not None:
+            metadata.update({"floor_semantics": FLOOR_SEMANTICS,
+                             "floor_rules": self._floor_metadata.ruleset_id,
+                             "floor_rules_version": self._floor_metadata.version,
+                             "floor_rules_validation": self._floor_metadata.validation_status})
 
         # Build the complete event first. Anything that can fail (validation, metadata)
         # must fail before state changes, so live access, phase and motions never run
@@ -326,10 +386,7 @@ class SimulationEngine:
             proposal=proposal,
             accepted=accepted,
             findings=findings,
-            metadata={"mode": mode.value,
-                      "ruleset": self._ruleset_metadata.ruleset_id,
-                      "ruleset_version": self._ruleset_metadata.version,
-                      "ruleset_validation": self._ruleset_metadata.validation_status},
+            metadata=metadata,
             scenario=self._scenario,
         )
         result = event.model_copy(deep=True)
@@ -343,5 +400,6 @@ class SimulationEngine:
                     action.evidence_id, sequence
                 )
         self.phase = after
+        self._floor = floor_after
         self._events.append(event)
         return result

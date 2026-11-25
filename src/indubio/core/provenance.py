@@ -23,8 +23,8 @@ Canonical setup (``indubio.scenario-setup/1``), one JSON object:
 
 * ``canonicalization``: the literal ``"indubio.scenario-setup/1"`` (domain separation).
 * ``jurisdiction``: the engine's ``SimulationConfig.jurisdiction`` (the ruleset ID). The
-  ruleset version and the simulation mode are run parameters already recorded in each
-  event's ``metadata``; they are not part of the scenario setup.
+  ruleset version, the simulation mode and the opt-in floor ruleset are run parameters
+  already recorded in each event's ``metadata``; they are not part of the scenario setup.
 * ``actors``: every actor's ``actor_id``, ``role``, ``human_controlled`` and
   ``display_name``, **sorted by** ``actor_id``. Actor order is not semantic: the engine
   keys actors by ID and projections sort participants by ID.

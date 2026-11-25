@@ -60,6 +60,15 @@ Disclosure events (``DiscloseEvidence``, policy in ``indubio.core.disclosure``):
   earlier events). A later disclosure therefore never retroactively un-redacts an earlier
   ``SubmitEvidence`` event: receiving a record is not learning which act, earlier, used
   it. Records received by disclosure carry ``disclosed_at_sequence``.
+
+Floor events (opt-in floor control, ``indubio.core.floor``): ``request_floor``,
+``withdraw_floor_request``, ``release_floor`` and ``advance_floor`` are public courtroom
+acts with no payload fields. Accepted ones are ``PUBLIC`` to every actor; rejected ones
+are ``WITHHELD`` like any other rejected attempt. ``floor`` (present only with floor
+control) is the current holder and FIFO queue, derived from the committed history alone;
+since only accepted public events change it, it reveals nothing a viewer could not
+reconstruct from its own projected events. Without floor control the field is omitted,
+so pre-floor projections serialize unchanged.
 """
 
 from collections.abc import Mapping, Sequence
@@ -69,20 +78,25 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field
 
 from indubio.core.disclosure import access_at, derive_grants, is_disclosable_record
+from indubio.core.floor import derive_floor
 from indubio.core.models import (
     Action,
     Actor,
+    AdvanceFloor,
     DiscloseEvidence,
     FileMotion,
     MovePhase,
     Object,
     Phase,
+    ReleaseFloor,
+    RequestFloor,
     Role,
     RuleFinding,
     RuleOnMotion,
     Speak,
     SubmitEvidence,
     TrialEvent,
+    WithdrawFloorRequest,
 )
 from indubio.evidence.models import EpistemicLayer
 from indubio.evidence.registry import EvidenceRegistry
@@ -136,6 +150,15 @@ class ProjectedEvent(BaseModel):
     findings: tuple[RuleFinding, ...] = ()
 
 
+class ProjectedFloor(BaseModel):
+    """Current floor holder and FIFO queue (public state; see the module docstring)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    holder_actor_id: str | None = None
+    queue: tuple[str, ...] = ()
+
+
 class PerspectiveProjection(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -150,11 +173,16 @@ class PerspectiveProjection(BaseModel):
     accessible_evidence_ids: tuple[str, ...]
     evidence: tuple[ProjectedEvidence, ...]
     events: tuple[ProjectedEvent, ...]
+    # ``None`` (and omitted from serialization) without floor control.
+    floor: ProjectedFloor | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 # Action kinds whose accepted form may be shown to other actors. Anything else is
 # withheld from non-authors (fail closed when a new kind is added).
-_PUBLIC_KINDS = (Speak, MovePhase, FileMotion, RuleOnMotion, Object, SubmitEvidence)
+_PUBLIC_KINDS = (
+    Speak, MovePhase, FileMotion, RuleOnMotion, Object, SubmitEvidence,
+    RequestFloor, WithdrawFloorRequest, ReleaseFloor, AdvanceFloor,
+)
 
 
 def _project_event(
@@ -232,6 +260,7 @@ def build_projection(
     evidence: EvidenceRegistry,
     phase: Phase,
     ruleset: RulesetMetadata,
+    floor_enabled: bool = False,
 ) -> PerspectiveProjection:
     """Pure projection from trusted inputs; callers must not pass actor-supplied state."""
     viewer = actors.get(viewer_actor_id)
@@ -243,6 +272,10 @@ def build_projection(
             raise ValueError("Events must be the complete committed history in order")
         expected += 1
     grants = derive_grants(events, actors=actors, base_acl=evidence_acl, registry=evidence)
+    floor = None
+    if floor_enabled:
+        state = derive_floor(events)
+        floor = ProjectedFloor(holder_actor_id=state.holder, queue=state.queue)
     viewer_ids = access_at(viewer.actor_id, evidence_acl, grants)
     scenario_ids = evidence.accessible_ids(viewer.actor_id)
     received = grants.get(viewer.actor_id, {})
@@ -280,6 +313,7 @@ def build_projection(
         accessible_evidence_ids=tuple(sorted(viewer_ids)),
         evidence=tuple(records),
         events=_project_events(events, viewer, actors, evidence_acl, received),
+        floor=floor,
     )
 
 

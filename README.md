@@ -27,9 +27,10 @@ python -m pip install -e ".[dev]"
 python -m pytest
 python -m indubio demo
 python -m indubio scenario-demo --mode strict --perspective pros
+python -m indubio floor-demo --mode realistic --perspective wit
 ```
 
-The demo runs entirely offline with scripted actions and prints a JSON event transcript (the trusted, unredacted audit history). Add `--perspective defense` (or another demo actor ID) to also print that actor's redacted perspective projection. `scenario-demo` initializes actors and sealed/scoped evidence from the bundled synthetic manifest (`src/indubio/scenarios/fixtures/synthetic_disclosure_demo.json`) and runs a scripted sequence of accepted and rejected evidence disclosures (illustrative policy only, not StPO). Each `scenario-demo` event also carries trusted scenario provenance (scenario ID, version and a deterministic setup digest); it is never shown in perspective projections. No API keys required. LLM and Hermes adapters are design seams, not yet operational.
+The demo runs entirely offline with scripted actions and prints a JSON event transcript (the trusted, unredacted audit history). Add `--perspective defense` (or another demo actor ID) to also print that actor's redacted perspective projection. `scenario-demo` initializes actors and sealed/scoped evidence from the bundled synthetic manifest (`src/indubio/scenarios/fixtures/synthetic_disclosure_demo.json`) and runs a scripted sequence of accepted and rejected evidence disclosures (illustrative policy only, not StPO). Each `scenario-demo` event also carries trusted scenario provenance (scenario ID, version and a deterministic setup digest); it is never shown in perspective projections. `floor-demo` runs the same manifest with the opt-in demonstrator speaking queue (`indubio.core.floor`): FIFO floor requests, withdrawal, release, judge-only advance, phase-boundary clearing and rejected duplicate/structural attempts; without floor control, `demo` and `scenario-demo` stay unscheduled and unchanged. No API keys required. LLM and Hermes adapters are design seams, not yet operational.
 
 ### Restoring from a journal
 
@@ -51,7 +52,7 @@ event = restored.propose(Proposal(actor_id="judge", action=MovePhase(destination
 store.append("demo-1", event)  # sequence continues at len(engine.events) + 1
 ```
 
-Restoration checks consistency against the scenario, ruleset version and mode, not authenticity: the journal is not tamper-evident. Journals without scenario provenance remain loadable with `EventStore.load` but raise `LegacyJournalError` on restore.
+Restoration checks consistency against the scenario, ruleset version, mode and (for floor-enabled runs) the recorded floor ruleset, not authenticity: the journal is not tamper-evident. Journals without scenario provenance remain loadable with `EventStore.load` but raise `LegacyJournalError` on restore.
 
 ## Principles
 
