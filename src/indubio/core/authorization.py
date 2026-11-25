@@ -26,7 +26,17 @@ Action kind               Allowed roles                                Denial ru
 ``file_motion``           prosecutor, defense, defendant               ``AUTH_MOTION``
 ``object``                prosecutor, defense, defendant               ``AUTH_OBJECTION``
 ``disclose_evidence``     judge, prosecutor, defense                   ``AUTH_DISCLOSE``
+``request_floor``         prosecutor, defense, defendant, witness      ``AUTH_FLOOR_REQUEST``
+``withdraw_floor_request`` prosecutor, defense, defendant, witness     ``AUTH_FLOOR_WITHDRAW``
+``release_floor``         prosecutor, defense, defendant, witness      ``AUTH_FLOOR_RELEASE``
+``advance_floor``         judge                                        ``AUTH_FLOOR_ADVANCE``
 ========================  ==========================================  =========================
+
+Floor actions (opt-in, ``indubio.core.floor``): the presiding judge is never queued and
+alone advances the queue; the other participants queue, withdraw and release. The
+passive observer has none. Whether floor control is enabled, and whether the proposer is
+queued or holding the floor, are structural checks in the engine (``FLOOR_*``), not role
+questions; speaking without the floor is a procedural question for the floor ruleset.
 
 Disclosure recipients (``DISCLOSURE_RECIPIENT_ROLES``): judge, prosecutor, defense,
 defendant; otherwise ``AUTH_DISCLOSE_RECIPIENT``. Whether the recipient is a known actor
@@ -66,15 +76,19 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from indubio.core.models import (
     ACTION_TYPES,
+    AdvanceFloor,
     DiscloseEvidence,
     FileMotion,
     MovePhase,
     Object,
+    ReleaseFloor,
+    RequestFloor,
     Role,
     RuleFinding,
     RuleOnMotion,
     Speak,
     SubmitEvidence,
+    WithdrawFloorRequest,
 )
 
 UNREGISTERED_ACTION_RULE_ID = "AUTH_ACTION_UNREGISTERED"
@@ -100,6 +114,7 @@ _PARTICIPANTS = frozenset({
 })
 _PARTIES = frozenset({Role.PROSECUTOR, Role.DEFENSE, Role.DEFENDANT})
 _JUDGE = frozenset({Role.JUDGE})
+_FLOOR_QUEUERS = frozenset({Role.PROSECUTOR, Role.DEFENSE, Role.DEFENDANT, Role.WITNESS})
 
 # Rule IDs and descriptions of pre-existing checks are kept verbatim for audit continuity.
 ACTION_POLICY: Mapping[type[BaseModel], ActionPermission] = MappingProxyType({
@@ -132,6 +147,23 @@ ACTION_POLICY: Mapping[type[BaseModel], ActionPermission] = MappingProxyType({
         allowed_roles=frozenset({Role.JUDGE, Role.PROSECUTOR, Role.DEFENSE}),
         rule_id="AUTH_DISCLOSE",
         description="Role cannot disclose evidence in this starter model",
+    ),
+    RequestFloor: ActionPermission(
+        kind="request_floor", allowed_roles=_FLOOR_QUEUERS, rule_id="AUTH_FLOOR_REQUEST",
+        description="Role cannot request the floor in this starter model",
+    ),
+    WithdrawFloorRequest: ActionPermission(
+        kind="withdraw_floor_request", allowed_roles=_FLOOR_QUEUERS,
+        rule_id="AUTH_FLOOR_WITHDRAW",
+        description="Role cannot withdraw a floor request in this starter model",
+    ),
+    ReleaseFloor: ActionPermission(
+        kind="release_floor", allowed_roles=_FLOOR_QUEUERS, rule_id="AUTH_FLOOR_RELEASE",
+        description="Role cannot release the floor in this starter model",
+    ),
+    AdvanceFloor: ActionPermission(
+        kind="advance_floor", allowed_roles=_JUDGE, rule_id="AUTH_FLOOR_ADVANCE",
+        description="Only a judge can advance the speaking queue",
     ),
 })
 

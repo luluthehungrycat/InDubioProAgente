@@ -38,6 +38,7 @@ from indubio.core.models import (
 from indubio.core.provenance import scenario_provenance
 from indubio.evidence.models import EpistemicLayer, EvidenceRecord
 from indubio.evidence.registry import EvidenceRegistry
+from indubio.jurisdictions.registry import get_floor_ruleset
 
 SCHEMA_VERSION = "indubio.scenario/1"
 BUNDLED_FIXTURES = frozenset({"synthetic_disclosure_demo"})
@@ -138,13 +139,27 @@ def load_bundled_manifest(name: str = "synthetic_disclosure_demo") -> ScenarioMa
     return load_manifest(text)
 
 
-def build_engine(manifest: ScenarioManifest, mode: Mode = Mode.STRICT) -> SimulationEngine:
-    """Initialize an engine from a validated manifest; the ruleset must be registered."""
+def build_engine(
+    manifest: ScenarioManifest,
+    mode: Mode = Mode.STRICT,
+    *,
+    floor_rules: str | None = None,
+) -> SimulationEngine:
+    """Initialize an engine from a validated manifest; the ruleset must be registered.
+
+    ``floor_rules`` opts into floor control (``indubio.core.floor``) with the registered
+    floor ruleset of that ID. It is a run parameter like ``mode``: it is recorded in every
+    event's ``metadata``, not in the scenario setup digest, so the same manifest can be
+    run with or without a speaking queue. Default ``None``: unscheduled, as before.
+    """
     if not isinstance(manifest, ScenarioManifest):
         raise TypeError("build_engine requires a validated ScenarioManifest")
+    if floor_rules is not None and not isinstance(floor_rules, str):
+        raise TypeError("floor_rules must be a registered floor ruleset ID")
     config = SimulationConfig(jurisdiction=manifest.jurisdiction, mode=mode)
     engine = SimulationEngine(
-        manifest.actors, config, evidence=manifest.registry(), scenario=manifest.identity()
+        manifest.actors, config, evidence=manifest.registry(), scenario=manifest.identity(),
+        floor_rules=get_floor_ruleset(floor_rules) if floor_rules is not None else None,
     )
     # Defense in depth: the engine digests its own snapshot; it must equal the digest of
     # the manifest as declared, or the manifest-to-engine conversion lost something.

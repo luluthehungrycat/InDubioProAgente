@@ -90,9 +90,49 @@ class Object(BaseModel):
     grounds: str = Field(min_length=1)
 
 
+class RequestFloor(BaseModel):
+    """Join the end of the speaking queue (opt-in floor control; ``indubio.core.floor``).
+
+    No fields: the requester is the proposing actor, so a request cannot name or queue
+    anyone else.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["request_floor"] = "request_floor"
+
+
+class WithdrawFloorRequest(BaseModel):
+    """Leave the speaking queue; the requester's own pending request only."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["withdraw_floor_request"] = "withdraw_floor_request"
+
+
+class ReleaseFloor(BaseModel):
+    """Give up the floor the proposing actor currently holds; nobody is granted it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["release_floor"] = "release_floor"
+
+
+class AdvanceFloor(BaseModel):
+    """Presiding act: end the current holder's floor, if any, and grant it to the queue head.
+
+    No fields: the next speaker is always the FIFO queue head, so the proposer cannot pick
+    or skip anyone.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["advance_floor"] = "advance_floor"
+
+
 Action = Annotated[
     Speak | SubmitEvidence | MovePhase | RuleOnMotion | FileMotion | Object
-    | DiscloseEvidence,
+    | DiscloseEvidence | RequestFloor | WithdrawFloorRequest | ReleaseFloor | AdvanceFloor,
     Field(discriminator="kind"),
 ]
 

@@ -23,17 +23,26 @@ Checks, all before an engine is returned (fail closed, ``RestoreError``):
    engine writes, and the recorded ruleset ID, version and validation status equal the
    currently registered ruleset's. There are no migrations: a journal recorded under a
    different ruleset version is refused, not reinterpreted.
-5. **Run mode:** the recorded ``mode`` must be a ``Mode`` value, and all events must
+5. **Floor control:** an event's ``metadata`` either has no floor keys (an unscheduled
+   run, including every journal recorded before floor control existed) or exactly
+   ``FLOOR_METADATA_KEYS``, and all events agree. Recorded floor semantics must be
+   ``indubio.floor/1`` and the floor ruleset ID, version and validation status must equal
+   the registered floor pack's (no migrations). If ``floor_rules`` (an ID) is passed,
+   the journal must record exactly that floor ruleset; an unscheduled journal is a
+   mismatch. The restored engine runs with the journal's floor control. For an empty
+   history, ``floor_rules`` selects it (default ``None``: no floor control), like
+   ``mode``.
+6. **Run mode:** the recorded ``mode`` must be a ``Mode`` value, and all events must
    record the same mode. The engine's ``config`` is public and mutable, so a live run can
    change mode between proposals, but such a change is not itself an event; restoration
    does not infer an unrecorded transition and refuses mixed-mode journals. If ``mode``
    is passed it must equal the journal's mode. The restored engine runs in that mode.
-6. **Regeneration:** each regenerated event equals the recorded event (``==`` and the
+7. **Regeneration:** each regenerated event equals the recorded event (``==`` and the
    JSON-mode dump). A proposal the engine refuses outright (unknown actor, out-of-schema
    action) is a journal the engine could not have produced and fails too.
 
 **Empty history** is a valid journal of zero events: the result equals
-``build_engine(manifest, mode)``, with ``mode`` defaulting to ``Mode.STRICT`` like
+``build_engine(manifest, mode, floor_rules=floor_rules)``, with ``mode`` defaulting to ``Mode.STRICT`` like
 ``build_engine``. Note that ``EventStore.load`` returns ``[]`` for an unknown simulation
 ID as well, so an empty restore cannot tell "new" from "misspelled".
 
@@ -50,13 +59,18 @@ from collections.abc import Iterable
 from pydantic import ValidationError
 
 from indubio.core.engine import SimulationEngine
+from indubio.core.floor import FLOOR_SEMANTICS
 from indubio.core.models import Mode, TrialEvent
-from indubio.jurisdictions.registry import get_ruleset
+from indubio.jurisdictions.registry import get_floor_ruleset, get_ruleset
 from indubio.persistence.sqlite import EventStore
 from indubio.scenarios.manifest import ScenarioManifest, build_engine
 
 # Exactly the keys ``SimulationEngine.propose`` writes into ``TrialEvent.metadata``.
 EVENT_METADATA_KEYS = frozenset({"mode", "ruleset", "ruleset_version", "ruleset_validation"})
+# The additional keys it writes, all together, only with floor control.
+FLOOR_METADATA_KEYS = frozenset({
+    "floor_semantics", "floor_rules", "floor_rules_version", "floor_rules_validation",
+})
 
 
 class RestoreError(ValueError):
@@ -119,6 +133,43 @@ def _check_provenance(manifest: ScenarioManifest, history: list[TrialEvent]) -> 
             )
 
 
+def _check_floor(history: list[TrialEvent]) -> tuple[bool, str | None]:
+    """``(recorded, floor ruleset ID or None)``; ``recorded`` is false for no events."""
+    recorded: set[str | None] = set()
+    for event in history:
+        keys = set(event.metadata)
+        if keys == EVENT_METADATA_KEYS:
+            recorded.add(None)
+            continue
+        if keys != EVENT_METADATA_KEYS | FLOOR_METADATA_KEYS:
+            raise RestoreError(f"Event {event.sequence} metadata keys are not the engine's")
+        floor_id = event.metadata["floor_rules"]
+        if event.metadata["floor_semantics"] != FLOOR_SEMANTICS:
+            raise RestoreError(
+                f"Event {event.sequence} records floor semantics "
+                f"{event.metadata['floor_semantics']!r}, not {FLOOR_SEMANTICS!r}"
+            )
+        try:
+            pinned = get_floor_ruleset(floor_id).metadata
+        except ValueError as error:
+            raise RestoreError(f"Event {event.sequence}: {error}") from error
+        for key, value in {
+            "floor_rules_version": pinned.version,
+            "floor_rules_validation": pinned.validation_status,
+        }.items():
+            if event.metadata[key] != value:
+                raise RestoreError(
+                    f"Event {event.sequence} records {key}={event.metadata[key]!r}, but the "
+                    f"registered floor ruleset has {value!r} (no migrations)"
+                )
+        recorded.add(floor_id)
+    if len(recorded) > 1:
+        raise RestoreError(
+            "History changes floor control; floor control is fixed for a run"
+        )
+    return (True, recorded.pop()) if recorded else (False, None)
+
+
 def _check_metadata(manifest: ScenarioManifest, history: list[TrialEvent]) -> Mode | None:
     pinned = get_ruleset(manifest.jurisdiction).metadata
     expected = {
@@ -128,7 +179,7 @@ def _check_metadata(manifest: ScenarioManifest, history: list[TrialEvent]) -> Mo
     }
     modes: set[str] = set()
     for event in history:
-        if set(event.metadata) != EVENT_METADATA_KEYS:
+        if not EVENT_METADATA_KEYS <= set(event.metadata):  # exact keys: ``_check_floor``
             raise RestoreError(f"Event {event.sequence} metadata keys are not the engine's")
         for key, value in expected.items():
             if event.metadata[key] != value:
@@ -153,8 +204,12 @@ def restore_engine(
     events: Iterable[TrialEvent],
     *,
     mode: Mode | str | None = None,
+    floor_rules: str | None = None,
 ) -> SimulationEngine:
     """A fresh engine whose committed history regenerates ``events`` exactly.
+
+    ``floor_rules``, if passed, must equal the journal's floor ruleset ID; for an empty
+    history it selects floor control (default ``None``: none).
 
     ``events`` is a trusted, ordered history (e.g. ``EventStore.load(...)``). Raises
     ``LegacyJournalError`` for an unstamped history, ``RestoreError`` for any other
@@ -164,6 +219,8 @@ def restore_engine(
     if not isinstance(manifest, ScenarioManifest):
         raise TypeError("restore_engine requires a validated ScenarioManifest")
     requested = Mode(mode) if mode is not None else None
+    if floor_rules is not None and not isinstance(floor_rules, str):
+        raise TypeError("floor_rules must be a floor ruleset ID or None")
     history = _detached(events)
     _check_sequences(history)
     _check_provenance(manifest, history)
@@ -174,9 +231,16 @@ def restore_engine(
             f"{journal_mode.value!r}"
         )
     run_mode = journal_mode or requested or Mode.STRICT
+    floor_recorded, journal_floor = _check_floor(history)
+    if floor_recorded and floor_rules is not None and floor_rules != journal_floor:
+        raise RestoreError(
+            f"Requested floor rules {floor_rules!r} differ from the journal's "
+            f"{journal_floor!r}"
+        )
+    run_floor = journal_floor if floor_recorded else floor_rules
 
     # Local until every event has been regenerated; discarded on any failure.
-    engine = build_engine(manifest, run_mode)
+    engine = build_engine(manifest, run_mode, floor_rules=run_floor)
     for recorded in history:
         try:
             regenerated = engine.propose(recorded.proposal)
@@ -206,6 +270,7 @@ def restore_from_store(
     manifest: ScenarioManifest,
     *,
     mode: Mode | str | None = None,
+    floor_rules: str | None = None,
 ) -> SimulationEngine:
     """Read-only convenience: restore ``simulation_id`` from a SQLite ``EventStore``.
 
@@ -223,11 +288,14 @@ def restore_from_store(
             raise RestoreError(
                 f"Journal row key {key} does not match payload sequence {event.sequence}"
             )
-    return restore_engine(manifest, [event for _, event in rows], mode=mode)
+    return restore_engine(
+        manifest, [event for _, event in rows], mode=mode, floor_rules=floor_rules
+    )
 
 
 __all__ = [
     "EVENT_METADATA_KEYS",
+    "FLOOR_METADATA_KEYS",
     "LegacyJournalError",
     "RestoreError",
     "restore_engine",

@@ -8,7 +8,7 @@
 - [ ] Run automated CI and inspect results (workflow not guaranteed to run in all GitHub environments)
 
 ## Phase 1 — deterministic courtroom kernel
-- [ ] Explicit per-role action permissions, speaking queue and interrupt/response actions (partial: authoritative fail-closed per-role table in `indubio.core.authorization` for all existing action kinds, passive observer; no speaking queue or interrupt/response actions yet)
+- [ ] Explicit per-role action permissions, speaking queue and interrupt/response actions (partial: authoritative fail-closed per-role table in `indubio.core.authorization` for all action kinds, passive observer; opt-in deterministic FIFO speaking queue and floor lifecycle with typed request/withdraw/release/advance actions and a separate versioned demonstrator floor pack; no interrupt/response actions yet)
 - [ ] Scenario manifests, sealed truth and scoped evidence registry with disclosure events (partial: immutable scoped `EvidenceRegistry` with sealed hidden truth; typed/versioned synthetic `ScenarioManifest`; illustrative accepted/rejected `DiscloseEvidence` events with event-time projection. No real-case import, dated/timed disclosures, existence-vs-contents distinction or source-backed disclosure rules)
 - [ ] Ruleset interface with source provenance and time-effective versions (partial: versioned `JurisdictionRuleset` protocol and metadata; demonstrator pack only, no effective-date selection)
 - [ ] Independent perspective projection for each actor, including confidential consultations (partial: deterministic redacted per-actor projections over committed events, the scoped evidence registry and disclosure grants; no confidential consultation channels yet)
@@ -49,4 +49,4 @@
 - [Legal knowledge service / german-legal-rag](LEGAL_KNOWLEDGE.md)
 - [Interruptions, streaming speech and human participation](LIVE_RUNTIME.md)
 
-**Next recommended PR:** to be decided (candidates: speaking queue and interrupt/response actions, or a tamper-evident journal hash chain on top of restoration). Avoid claiming StPO accuracy before official-source verification.
+**Next recommended PR:** explicit interrupt request and response on the opt-in floor (then: a tamper-evident journal hash chain on top of restoration). Avoid claiming StPO accuracy before official-source verification.

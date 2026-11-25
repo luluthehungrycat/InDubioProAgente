@@ -58,6 +58,10 @@ class RuleContext(BaseModel):
     committed_event_count: int = Field(ge=0)
     motion_ids: frozenset[str] = frozenset()
     actor_role: Role
+    # Opt-in floor control (``indubio.core.floor``). Defaults describe an engine without
+    # floor control, so rulesets written before it see an unchanged context.
+    floor_enabled: bool = False
+    actor_holds_floor: bool = False
 
 
 @runtime_checkable
