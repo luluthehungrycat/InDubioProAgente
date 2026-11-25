@@ -30,13 +30,17 @@ Action kind               Allowed roles                                Denial ru
 ``withdraw_floor_request`` prosecutor, defense, defendant, witness     ``AUTH_FLOOR_WITHDRAW``
 ``release_floor``         prosecutor, defense, defendant, witness      ``AUTH_FLOOR_RELEASE``
 ``advance_floor``         judge                                        ``AUTH_FLOOR_ADVANCE``
+``request_interrupt``     prosecutor, defense, defendant, witness      ``AUTH_FLOOR_INTERRUPT``
+``respond_to_interrupt``  judge                                        ``AUTH_FLOOR_INTERRUPT_RESPONSE``
 ========================  ==========================================  =========================
 
 Floor actions (opt-in, ``indubio.core.floor``): the presiding judge is never queued and
-alone advances the queue; the other participants queue, withdraw and release. The
-passive observer has none. Whether floor control is enabled, and whether the proposer is
-queued or holding the floor, are structural checks in the engine (``FLOOR_*``), not role
-questions; speaking without the floor is a procedural question for the floor ruleset.
+alone advances the queue and answers interrupt requests; the other participants queue,
+withdraw, release and request to interrupt. The passive observer has none. Whether
+floor control is enabled, whether the proposer is queued or holding the floor, and
+whether a referenced interrupt request is pending, are structural checks in the engine
+(``FLOOR_*``), not role questions; speaking without the floor is a procedural question
+for the floor ruleset.
 
 Disclosure recipients (``DISCLOSURE_RECIPIENT_ROLES``): judge, prosecutor, defense,
 defendant; otherwise ``AUTH_DISCLOSE_RECIPIENT``. Whether the recipient is a known actor
@@ -83,6 +87,8 @@ from indubio.core.models import (
     Object,
     ReleaseFloor,
     RequestFloor,
+    RequestInterrupt,
+    RespondToInterrupt,
     Role,
     RuleFinding,
     RuleOnMotion,
@@ -164,6 +170,15 @@ ACTION_POLICY: Mapping[type[BaseModel], ActionPermission] = MappingProxyType({
     AdvanceFloor: ActionPermission(
         kind="advance_floor", allowed_roles=_JUDGE, rule_id="AUTH_FLOOR_ADVANCE",
         description="Only a judge can advance the speaking queue",
+    ),
+    RequestInterrupt: ActionPermission(
+        kind="request_interrupt", allowed_roles=_FLOOR_QUEUERS, rule_id="AUTH_FLOOR_INTERRUPT",
+        description="Role cannot request to interrupt in this starter model",
+    ),
+    RespondToInterrupt: ActionPermission(
+        kind="respond_to_interrupt", allowed_roles=_JUDGE,
+        rule_id="AUTH_FLOOR_INTERRUPT_RESPONSE",
+        description="Only a judge can answer an interrupt request",
     ),
 })
 

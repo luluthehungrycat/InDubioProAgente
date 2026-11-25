@@ -40,6 +40,8 @@ from indubio.core.models import (
     Proposal,
     ReleaseFloor,
     RequestFloor,
+    RequestInterrupt,
+    RespondToInterrupt,
     Role,
     RuleOnMotion,
     SimulationConfig,
@@ -73,6 +75,8 @@ FLOOR_EXPECTED = {
     "withdraw_floor_request": ({P, D, A, W}, "AUTH_FLOOR_WITHDRAW"),
     "release_floor": ({P, D, A, W}, "AUTH_FLOOR_RELEASE"),
     "advance_floor": ({J}, "AUTH_FLOOR_ADVANCE"),
+    "request_interrupt": ({P, D, A, W}, "AUTH_FLOOR_INTERRUPT"),
+    "respond_to_interrupt": ({J}, "AUTH_FLOOR_INTERRUPT_RESPONSE"),
 }
 CORE_EXPECTED = EXPECTED
 EXPECTED = {**CORE_EXPECTED, **FLOOR_EXPECTED}
@@ -94,6 +98,8 @@ def sample_action(kind, actor_id):
         "withdraw_floor_request": WithdrawFloorRequest(),
         "release_floor": ReleaseFloor(),
         "advance_floor": AdvanceFloor(),
+        "request_interrupt": RequestInterrupt(),
+        "respond_to_interrupt": RespondToInterrupt(request_sequence=1, decision="denied"),
     }[kind]
 
 

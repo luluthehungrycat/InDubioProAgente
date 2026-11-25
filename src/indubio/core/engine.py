@@ -210,8 +210,9 @@ class SimulationEngine:
     def floor(self) -> FloorState | None:
         """Current (immutable) floor state, or ``None`` without floor control.
 
-        Derived only from accepted floor and phase events, which are public acts, so it
-        holds no private information; ``perspective()`` exposes the same state.
+        Holder, queue and pending interrupt requests. Derived only from accepted floor and
+        phase events, which are public acts, so it holds no private information;
+        ``perspective()`` exposes the same state.
         """
         return self._floor
 
@@ -363,7 +364,8 @@ class SimulationEngine:
         floor_after = self._floor
         if accepted and self._floor is not None:
             floor_after = floor_transition(
-                self._floor, actor.actor_id, action, phase_changed=after != before
+                self._floor, actor.actor_id, action,
+                sequence=sequence, phase_changed=after != before,
             )
         metadata = {"mode": mode.value,
                     "ruleset": self._ruleset_metadata.ruleset_id,
