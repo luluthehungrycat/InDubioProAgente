@@ -40,7 +40,7 @@ For `InterruptIntent`, choose `granted`, `queued`, `denied` or `actual_talk_over
 Keep model/adapter version, decision input snapshot digest, candidate options, scores, seed, sample, time and arbitration result. Full replay uses recorded decisions, never assumes calling a live stochastic model again produces identical timing. Benchmarks: interruption precision judged by blinded reviewers, false interjections per simulated minute, missed salient opportunities, jitter/latency, human perceived control and privacy incidents.
 
 ## Implementation gates
-- [ ] Text-only manual interruption request and floor queue with tests (partial: opt-in FIFO floor queue in `indubio.core.floor`; interruption request/response not yet).
+- [ ] Text-only manual interruption request and floor queue with tests (partial: opt-in FIFO floor queue in `indubio.core.floor` with typed interrupt requests and explicit judge grant/deny responses; no `InterruptIntent` fields such as target, reason, urgency or confidence, no withdrawal of an interrupt request, no automatic arbitration, scoring or timing).
 - [ ] Semantic trigger fixtures and rule-based scorer.
 - [ ] Optional decision-model adapter with calibration and throttling tests.
 - [ ] Streaming text with cancellable output and audience filtering.

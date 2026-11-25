@@ -62,13 +62,17 @@ Disclosure events (``DiscloseEvidence``, policy in ``indubio.core.disclosure``):
   it. Records received by disclosure carry ``disclosed_at_sequence``.
 
 Floor events (opt-in floor control, ``indubio.core.floor``): ``request_floor``,
-``withdraw_floor_request``, ``release_floor`` and ``advance_floor`` are public courtroom
-acts with no payload fields. Accepted ones are ``PUBLIC`` to every actor; rejected ones
-are ``WITHHELD`` like any other rejected attempt. ``floor`` (present only with floor
-control) is the current holder and FIFO queue, derived from the committed history alone;
-since only accepted public events change it, it reveals nothing a viewer could not
-reconstruct from its own projected events. Without floor control the field is omitted,
-so pre-floor projections serialize unchanged.
+``withdraw_floor_request``, ``release_floor``, ``advance_floor``, ``request_interrupt``
+and ``respond_to_interrupt`` are public courtroom acts. Only ``respond_to_interrupt`` has
+payload fields (the request's sequence and the decision), both public. Accepted ones are
+``PUBLIC`` to every actor; rejected ones are ``WITHHELD`` like any other rejected attempt,
+so a rejected interrupt request or response reveals neither author nor kind to others.
+``floor`` (present only with floor control) is the current holder, FIFO queue and
+pending interrupt requests (``pending_interrupts``, omitted while empty), derived from
+the committed history alone; since only accepted public events change it, it reveals
+nothing a viewer could not reconstruct from its own projected events. Without floor
+control the field is omitted, so pre-floor projections serialize unchanged, and floor
+projections without pending interrupts serialize as before interrupts existed.
 """
 
 from collections.abc import Mapping, Sequence
@@ -90,6 +94,8 @@ from indubio.core.models import (
     Phase,
     ReleaseFloor,
     RequestFloor,
+    RequestInterrupt,
+    RespondToInterrupt,
     Role,
     RuleFinding,
     RuleOnMotion,
@@ -150,13 +156,26 @@ class ProjectedEvent(BaseModel):
     findings: tuple[RuleFinding, ...] = ()
 
 
+class ProjectedInterrupt(BaseModel):
+    """A pending interrupt request: its request event's sequence and the requester."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    request_sequence: int = Field(ge=1)
+    actor_id: str
+
+
 class ProjectedFloor(BaseModel):
-    """Current floor holder and FIFO queue (public state; see the module docstring)."""
+    """Current floor holder, FIFO queue and pending interrupts (public state)."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     holder_actor_id: str | None = None
     queue: tuple[str, ...] = ()
+    # In request-sequence order; omitted from serialization while empty.
+    pending_interrupts: tuple[ProjectedInterrupt, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
 
 
 class PerspectiveProjection(BaseModel):
@@ -182,6 +201,7 @@ class PerspectiveProjection(BaseModel):
 _PUBLIC_KINDS = (
     Speak, MovePhase, FileMotion, RuleOnMotion, Object, SubmitEvidence,
     RequestFloor, WithdrawFloorRequest, ReleaseFloor, AdvanceFloor,
+    RequestInterrupt, RespondToInterrupt,
 )
 
 
@@ -275,7 +295,16 @@ def build_projection(
     floor = None
     if floor_enabled:
         state = derive_floor(events)
-        floor = ProjectedFloor(holder_actor_id=state.holder, queue=state.queue)
+        floor = ProjectedFloor(
+            holder_actor_id=state.holder,
+            queue=state.queue,
+            pending_interrupts=tuple(
+                ProjectedInterrupt(
+                    request_sequence=pending.request_sequence, actor_id=pending.actor_id
+                )
+                for pending in state.interrupts
+            ),
+        )
     viewer_ids = access_at(viewer.actor_id, evidence_acl, grants)
     scenario_ids = evidence.accessible_ids(viewer.actor_id)
     received = grants.get(viewer.actor_id, {})

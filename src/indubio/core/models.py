@@ -130,9 +130,37 @@ class AdvanceFloor(BaseModel):
     kind: Literal["advance_floor"] = "advance_floor"
 
 
+class RequestInterrupt(BaseModel):
+    """Ask the presiding judge to interrupt the current floor holder (``indubio.core.floor``).
+
+    No fields: the requester is the proposing actor and the interrupted holder is whoever
+    holds the floor when the request is accepted. An accepted request is identified by
+    its own event sequence; it does not change the holder or the queue by itself.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["request_interrupt"] = "request_interrupt"
+
+
+class RespondToInterrupt(BaseModel):
+    """Presiding act: grant or deny one pending interrupt request, named by its sequence.
+
+    ``decision`` is the judge's answer to the request. It is distinct from whether this
+    event itself is accepted by the engine: a ``denied`` response can be an accepted event.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["respond_to_interrupt"] = "respond_to_interrupt"
+    request_sequence: int = Field(ge=1)
+    decision: Literal["granted", "denied"]
+
+
 Action = Annotated[
     Speak | SubmitEvidence | MovePhase | RuleOnMotion | FileMotion | Object
-    | DiscloseEvidence | RequestFloor | WithdrawFloorRequest | ReleaseFloor | AdvanceFloor,
+    | DiscloseEvidence | RequestFloor | WithdrawFloorRequest | ReleaseFloor | AdvanceFloor
+    | RequestInterrupt | RespondToInterrupt,
     Field(discriminator="kind"),
 ]
 
